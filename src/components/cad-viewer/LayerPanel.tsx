@@ -2,7 +2,6 @@
 
 import { useCADStore } from "@/lib/cad/store";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { Switch } from "@/components/ui/switch";
 import { Eye, EyeOff } from "lucide-react";
 
 export function LayerPanel() {
@@ -15,9 +14,9 @@ export function LayerPanel() {
   );
 
   return (
-    <div className="w-56 border-l border-zinc-800 bg-zinc-900/50">
-      <div className="p-3 border-b border-zinc-800">
-        <h3 className="text-xs font-medium text-zinc-400">
+    <div className="w-56 border-l border-[#E7E7E7] bg-[#F7F9FA]">
+      <div className="p-3 border-b border-[#E7E7E7]">
+        <h3 className="text-xs font-medium text-[#555]">
           Layers ({sortedLayers.length})
         </h3>
       </div>
@@ -28,22 +27,22 @@ export function LayerPanel() {
             return (
               <button
                 key={layer.name}
-                className="w-full flex items-center gap-2 px-2 py-1.5 rounded text-xs hover:bg-zinc-800 transition-colors"
+                className="w-full flex items-center gap-2 px-2 py-1.5 rounded text-xs hover:bg-[#EDEDF0] transition-colors"
                 onClick={() => toggleLayerVisibility(layer.name)}
               >
                 {isVisible ? (
-                  <Eye className="w-3 h-3 text-zinc-400" />
+                  <Eye className="w-3 h-3 text-[#555]" />
                 ) : (
-                  <EyeOff className="w-3 h-3 text-zinc-600" />
+                  <EyeOff className="w-3 h-3 text-[#bbb]" />
                 )}
                 <span
                   className={
-                    isVisible ? "text-zinc-300" : "text-zinc-600 line-through"
+                    isVisible ? "text-[#333]" : "text-[#bbb] line-through"
                   }
                 >
                   {layer.name}
                 </span>
-                <span className="ml-auto text-zinc-600">
+                <span className="ml-auto text-[#999]">
                   {layer.entityCount}
                 </span>
               </button>

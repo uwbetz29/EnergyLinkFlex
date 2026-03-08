@@ -24,8 +24,10 @@ const DXF_COLORS: Record<number, string> = {
 };
 
 function dxfColorToHex(colorIndex: number | undefined): string {
-  if (colorIndex === undefined) return "#CCCCCC";
-  return DXF_COLORS[colorIndex] || "#CCCCCC";
+  if (colorIndex === undefined) return "#333333";
+  // Color 7 is white in DXF, but on a light background we want it dark
+  if (colorIndex === 7) return "#222222";
+  return DXF_COLORS[colorIndex] || "#333333";
 }
 
 export interface RendererOptions {
@@ -37,10 +39,10 @@ export interface RendererOptions {
 }
 
 const DEFAULT_OPTIONS: RendererOptions = {
-  backgroundColor: "#1a1a2e",
-  defaultColor: "#CCCCCC",
-  highlightColor: "#FFD700",
-  hoverColor: "#4A90D9",
+  backgroundColor: "#FFFFFF",
+  defaultColor: "#333333",
+  highlightColor: "#93C90F",
+  hoverColor: "#00BFDD",
   lineWidth: 1,
 };
 
@@ -250,7 +252,7 @@ export class CADRenderer {
     canvas.width = Math.max(256, entity.text.length * fontSize);
     canvas.height = fontSize * 2;
 
-    ctx.fillStyle = "#CCCCCC";
+    ctx.fillStyle = "#333333";
     ctx.font = `${fontSize}px monospace`;
     ctx.fillText(entity.text, 0, fontSize);
 

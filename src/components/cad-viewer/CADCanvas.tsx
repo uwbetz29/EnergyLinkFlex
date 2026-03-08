@@ -84,9 +84,9 @@ export function CADCanvas() {
       onMouseMove={handleMouseMove}
     >
       {!drawing && (
-        <div className="absolute inset-0 flex items-center justify-center text-zinc-500">
+        <div className="absolute inset-0 flex items-center justify-center text-[#888]">
           <div className="text-center">
-            <p className="text-lg font-medium">No drawing loaded</p>
+            <p className="text-lg font-medium text-[#555]">No drawing loaded</p>
             <p className="text-sm mt-1">Upload a DXF file to get started</p>
           </div>
         </div>
