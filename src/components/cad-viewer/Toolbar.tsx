@@ -12,10 +12,18 @@ import {
   RotateCcw,
   RotateCw,
   Sparkles,
+  BoxSelect,
+  GitCompare,
 } from "lucide-react";
 import Image from "next/image";
 import Link from "next/link";
 import { useProjectStore } from "@/lib/projects/store";
+import {
+  Tooltip,
+  TooltipTrigger,
+  TooltipContent,
+  TooltipProvider,
+} from "@/components/ui/tooltip";
 
 interface ToolbarProps {
   onToggleSidebar?: () => void;
@@ -27,20 +35,23 @@ function ToolButton({
   onClick,
   disabled,
   title,
+  description,
+  shortcut,
   active,
   children,
 }: {
   onClick?: () => void;
   disabled?: boolean;
   title: string;
+  description?: string;
+  shortcut?: string;
   active?: boolean;
   children: React.ReactNode;
 }) {
-  return (
+  const btn = (
     <button
       onClick={onClick}
       disabled={disabled}
-      title={title}
       className={`h-7 w-7 inline-flex items-center justify-center rounded-md text-xs transition-colors
         ${active ? "bg-[#93C90F]/25 text-[#5A7D00]" : "text-[#666] hover:bg-[#E0E0E0] hover:text-[#0C121D]"}
         ${disabled ? "opacity-30 pointer-events-none" : ""}
@@ -48,6 +59,27 @@ function ToolButton({
     >
       {children}
     </button>
+  );
+
+  return (
+    <Tooltip>
+      <TooltipTrigger render={<div className="inline-flex" />}>
+        {btn}
+      </TooltipTrigger>
+      <TooltipContent side="bottom" sideOffset={8}>
+        <div className="flex flex-col gap-0.5">
+          <div className="flex items-center gap-2">
+            <span className="font-medium">{title}</span>
+            {shortcut && (
+              <kbd className="text-[10px] px-1 py-0.5 rounded bg-white/15 font-mono">{shortcut}</kbd>
+            )}
+          </div>
+          {description && (
+            <span className="text-[10px] opacity-70 font-normal">{description}</span>
+          )}
+        </div>
+      </TooltipContent>
+    </Tooltip>
   );
 }
 
@@ -61,8 +93,12 @@ function ToolGroup({ children }: { children: React.ReactNode }) {
 
 export function Toolbar({ onToggleSidebar, showSidebar, projectName }: ToolbarProps) {
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const { drawing, isLoading, error, undo, redo, scaleHistory, redoStack, isRecognizing, componentGraph, recognizeComponents } =
-    useCADStore();
+  const {
+    drawing, isLoading, error, undo, redo, scaleHistory, redoStack,
+    isRecognizing, componentGraph, recognizeComponents,
+    showComponentOverlay, toggleComponentOverlay,
+    showDiff, toggleDiff, originalDrawingSnapshot,
+  } = useCADStore();
   const { currentProjectId, addDrawing } = useProjectStore();
 
   const handleFileUpload = useCallback(
@@ -86,6 +122,7 @@ export function Toolbar({ onToggleSidebar, showSidebar, projectName }: ToolbarPr
   );
 
   return (
+    <TooltipProvider delay={300}>
     <header className="flex items-center h-14 px-4 bg-white border-b border-[#D4D4D4]">
       {/* Left: Hamburger + Logo + Project name */}
       <div className="flex items-center gap-3 min-w-0">
@@ -129,13 +166,13 @@ export function Toolbar({ onToggleSidebar, showSidebar, projectName }: ToolbarPr
 
         {/* View tools */}
         <ToolGroup>
-          <ToolButton title="Zoom In" disabled={!drawing}>
+          <ToolButton title="Zoom In" description="Scroll wheel also zooms" disabled={!drawing}>
             <ZoomIn className="w-3.5 h-3.5" />
           </ToolButton>
           <ToolButton title="Zoom Out" disabled={!drawing}>
             <ZoomOut className="w-3.5 h-3.5" />
           </ToolButton>
-          <ToolButton title="Fit to View" disabled={!drawing}>
+          <ToolButton title="Fit to View" description="Reset view to show entire drawing" disabled={!drawing}>
             <Maximize className="w-3.5 h-3.5" />
           </ToolButton>
         </ToolGroup>
@@ -144,6 +181,8 @@ export function Toolbar({ onToggleSidebar, showSidebar, projectName }: ToolbarPr
         <ToolGroup>
           <ToolButton
             title="Undo"
+            description="Revert last dimension change"
+            shortcut="Ctrl+Z"
             onClick={undo}
             disabled={scaleHistory.length === 0}
           >
@@ -151,6 +190,7 @@ export function Toolbar({ onToggleSidebar, showSidebar, projectName }: ToolbarPr
           </ToolButton>
           <ToolButton
             title="Redo"
+            shortcut="Ctrl+Y"
             onClick={redo}
             disabled={redoStack.length === 0}
           >
@@ -160,7 +200,8 @@ export function Toolbar({ onToggleSidebar, showSidebar, projectName }: ToolbarPr
 
         {/* Upload (secondary — for adding files to existing projects) */}
         <ToolButton
-          title="Upload another file"
+          title="Upload File"
+          description="Add another DXF, DWG, or PDF"
           onClick={() => fileInputRef.current?.click()}
           disabled={isLoading}
         >
@@ -170,7 +211,8 @@ export function Toolbar({ onToggleSidebar, showSidebar, projectName }: ToolbarPr
         {/* AI Analyze */}
         <ToolGroup>
           <ToolButton
-            title={componentGraph ? `Components: ${componentGraph.components.length} detected` : "Analyze Drawing (AI)"}
+            title={componentGraph ? `${componentGraph.components.length} Components Detected` : "AI Analysis"}
+            description={componentGraph ? "Re-analyze to refresh components" : "Identify components, map dimensions"}
             onClick={recognizeComponents}
             disabled={!drawing || isRecognizing}
             active={!!componentGraph}
@@ -184,6 +226,26 @@ export function Toolbar({ onToggleSidebar, showSidebar, projectName }: ToolbarPr
               <Sparkles className="w-3.5 h-3.5" />
             )}
           </ToolButton>
+          {componentGraph && (
+            <ToolButton
+              title={showComponentOverlay ? "Hide Boxes" : "Show Component Boxes"}
+              description="Toggle colored bounding boxes around each component"
+              onClick={toggleComponentOverlay}
+              active={showComponentOverlay}
+            >
+              <BoxSelect className="w-3.5 h-3.5" />
+            </ToolButton>
+          )}
+          {originalDrawingSnapshot && (
+            <ToolButton
+              title={showDiff ? "Hide Changes" : "Show Changes"}
+              description="Compare current drawing with original (before edits)"
+              onClick={toggleDiff}
+              active={showDiff}
+            >
+              <GitCompare className="w-3.5 h-3.5" />
+            </ToolButton>
+          )}
         </ToolGroup>
       </div>
 
@@ -206,5 +268,6 @@ export function Toolbar({ onToggleSidebar, showSidebar, projectName }: ToolbarPr
         )}
       </div>
     </header>
+    </TooltipProvider>
   );
 }

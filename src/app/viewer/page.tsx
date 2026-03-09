@@ -9,6 +9,7 @@ import { CompositeIndicator } from "@/components/cad-viewer/CompositeIndicator";
 import { useProjectStore } from "@/lib/projects/store";
 import { useCADStore } from "@/lib/cad/store";
 import { ChevronLeft, ChevronRight } from "lucide-react";
+import { OnboardingOverlay } from "@/components/cad-viewer/OnboardingCoach";
 
 export default function ViewerPage() {
   const router = useRouter();
@@ -63,6 +64,9 @@ export default function ViewerPage() {
 
       {/* Status bar */}
       <StatusBar />
+
+      {/* First-time onboarding */}
+      <OnboardingOverlay />
     </div>
   );
 }
@@ -113,7 +117,7 @@ function StatusBar() {
     <div className="h-7 bg-[#F0F0F0] border-t border-[#D4D4D4] flex items-center px-3 text-[10px] text-[#999]">
       <span>EnergyLink FLEX v0.1.0</span>
       <span className="mx-2">|</span>
-      <span>Click+Drag to pan, Scroll to zoom</span>
+      <span>Drag to pan | Scroll to zoom | Click dimension labels to edit</span>
 
       {/* PDF page navigation */}
       {pdfPageCount > 1 && (

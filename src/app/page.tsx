@@ -652,6 +652,27 @@ export default function StartPage() {
             </div>
           </button>
         </div>
+
+        {/* How it works — guided steps */}
+        <div className="mt-14 w-full max-w-2xl">
+          <p className="text-[10px] font-semibold uppercase tracking-wider text-[#999] text-center mb-4">How it works</p>
+          <div className="grid grid-cols-4 gap-3">
+            {[
+              { num: "1", title: "Upload", desc: "DXF, DWG, or PDF drawing" },
+              { num: "2", title: "AI Analyze", desc: "Auto-detect components" },
+              { num: "3", title: "Edit", desc: "Click dimensions to resize" },
+              { num: "4", title: "Export", desc: "Download modified drawing" },
+            ].map((s) => (
+              <div key={s.num} className="text-center">
+                <div className="w-8 h-8 mx-auto rounded-full bg-[#93C90F]/10 text-[#93C90F] text-sm font-bold flex items-center justify-center mb-2">
+                  {s.num}
+                </div>
+                <div className="text-sm font-medium text-[#333]">{s.title}</div>
+                <div className="text-[11px] text-[#999] mt-0.5">{s.desc}</div>
+              </div>
+            ))}
+          </div>
+        </div>
       </div>
 
       {/* Footer */}
@@ -673,6 +694,9 @@ export default function StartPage() {
                 <DialogTitle>Name Your Project</DialogTitle>
               </DialogHeader>
               <div className="py-2">
+                <p className="text-sm text-[#666] mb-3">
+                  Give your project a name so you can find it later. This is typically the site name or quote reference.
+                </p>
                 <label className="text-sm font-medium text-[#666] mb-1 block">Project Name</label>
                 <Input
                   value={projectName}
@@ -681,7 +705,7 @@ export default function StartPage() {
                   onKeyDown={(e) => { if (e.key === "Enter" && projectName.trim()) setWizardStep(2); }}
                   autoFocus
                 />
-                <p className="text-xs text-[#999] mt-2">This is the name for the overall project or quote.</p>
+                <p className="text-xs text-[#999] mt-2">Tip: Use the site name and system type for easy identification.</p>
               </div>
               <DialogFooter>
                 <Button variant="outline" onClick={() => setShowWizard(false)}>Cancel</Button>
@@ -703,6 +727,9 @@ export default function StartPage() {
                 <DialogTitle>Upload Project Files</DialogTitle>
               </DialogHeader>
               <div className="py-2 space-y-4">
+                <p className="text-sm text-[#666]">
+                  Upload the engineering drawings you want to work with. We support AutoCAD DXF/DWG and multi-page PDF files.
+                </p>
                 <input
                   ref={fileInputRef}
                   type="file"
@@ -842,6 +869,9 @@ export default function StartPage() {
                 <DialogTitle>AI Drawing Analysis</DialogTitle>
               </DialogHeader>
               <div className="py-2">
+                <p className="text-sm text-[#666] mb-3">
+                  AI will analyze your drawings to identify components (stacks, ducts, silencers) and link related dimensions across pages. You can skip this and run it later from the toolbar.
+                </p>
                 {isProcessing ? (
                   <div className="flex items-center gap-3 p-4">
                     <Loader2 className="w-5 h-5 text-[#93C90F] animate-spin" />

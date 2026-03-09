@@ -4,6 +4,8 @@ import { useEffect, useRef, useCallback, useState } from "react";
 import { CADRenderer } from "@/lib/cad/renderer";
 import { useCADStore } from "@/lib/cad/store";
 import { DimensionOverlay } from "./DimensionOverlay";
+import { IntentBar } from "./IntentBar";
+import { ContextualHints, EmptyCanvasGuide, WorkflowBar } from "./OnboardingCoach";
 
 export function CADCanvas() {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -20,6 +22,11 @@ export function CADCanvas() {
     hoverComponent,
     pdfCurrentPage,
     lastModification,
+    showComponentOverlay,
+    componentGraph,
+    showDiff,
+    originalDrawingSnapshot,
+    dimensions,
   } = useCADStore();
 
   // Initialize renderer
@@ -90,6 +97,30 @@ export function CADCanvas() {
     }
   }, [selectedComponentId, hoveredComponentId]);
 
+  // Component bounding box overlay (Feature 1)
+  useEffect(() => {
+    if (!rendererRef.current) return;
+    if (showComponentOverlay && componentGraph && componentGraph.components.length > 0) {
+      // Delay slightly to ensure drawing is loaded
+      const timer = setTimeout(() => {
+        rendererRef.current?.showComponentBoxes(componentGraph.components);
+      }, 100);
+      return () => clearTimeout(timer);
+    } else {
+      rendererRef.current.clearComponentBoxes();
+    }
+  }, [showComponentOverlay, componentGraph, drawing]);
+
+  // Visual diff overlay (Feature 3)
+  useEffect(() => {
+    if (!rendererRef.current) return;
+    if (showDiff && originalDrawingSnapshot && drawing) {
+      rendererRef.current.showDiffOverlay(originalDrawingSnapshot.entities, drawing.entities);
+    } else {
+      rendererRef.current.clearDiffOverlay();
+    }
+  }, [showDiff, originalDrawingSnapshot, drawing]);
+
   const handleClick = useCallback(
     (event: React.MouseEvent) => {
       if (!rendererRef.current || !drawing) return;
@@ -123,17 +154,19 @@ export function CADCanvas() {
       className="w-full h-full relative cursor-grab active:cursor-grabbing"
       onClick={handleClick}
     >
-      {!drawing && (
-        <div className="absolute inset-0 flex items-center justify-center text-[#888]">
-          <div className="text-center">
-            <p className="text-lg font-medium text-[#555]">No drawing loaded</p>
-            <p className="text-sm mt-1">Upload a file or click a source file to start working</p>
-          </div>
-        </div>
-      )}
+      {!drawing && <EmptyCanvasGuide />}
+
+      {/* Contextual hints — guide users to the next step */}
+      {drawing && <ContextualHints />}
 
       {/* Dimension overlay — clickable dimension labels */}
       {drawing && <DimensionOverlay renderer={rendererReady} />}
+
+      {/* Workflow suggestion bar */}
+      <WorkflowBar />
+
+      {/* Intent-based editing bar (Feature 6) */}
+      {drawing && dimensions.length > 0 && <IntentBar />}
 
       {/* Minimap */}
       {drawing && (

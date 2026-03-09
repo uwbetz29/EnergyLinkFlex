@@ -12,6 +12,8 @@ import {
   FileText,
   FileImage,
   Sparkles,
+  BoxSelect,
+  GitCompare,
 } from "lucide-react";
 
 const TEST_FILES = [
@@ -46,8 +48,12 @@ export default function TestViewerPage() {
   const dimensions = useCADStore((s) => s.dimensions);
   const isLoading = useCADStore((s) => s.isLoading);
   const error = useCADStore((s) => s.error);
-  const { undo, redo, scaleHistory, redoStack, pdfPageCount, pdfCurrentPage, setPDFPage, isRecognizing, componentGraph, recognizeComponents } =
-    useCADStore();
+  const {
+    undo, redo, scaleHistory, redoStack, pdfPageCount, pdfCurrentPage, setPDFPage,
+    isRecognizing, componentGraph, recognizeComponents,
+    showComponentOverlay, toggleComponentOverlay,
+    showDiff, toggleDiff, originalDrawingSnapshot,
+  } = useCADStore();
 
   const handleFileUpload = useCallback(
     async (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -188,6 +194,22 @@ export default function TestViewerPage() {
                   )}
                   {isRecognizing ? "Analyzing..." : componentGraph ? `${componentGraph.components.length} components` : "Analyze"}
                 </button>
+                {componentGraph && (
+                  <ToolButton
+                    title={showComponentOverlay ? "Hide component boxes" : "Show component boxes"}
+                    onClick={toggleComponentOverlay}
+                  >
+                    <BoxSelect className={`w-3.5 h-3.5 ${showComponentOverlay ? "text-[#93C90F]" : ""}`} />
+                  </ToolButton>
+                )}
+                {originalDrawingSnapshot && (
+                  <ToolButton
+                    title={showDiff ? "Hide changes" : "Show changes (before/after)"}
+                    onClick={toggleDiff}
+                  >
+                    <GitCompare className={`w-3.5 h-3.5 ${showDiff ? "text-[#93C90F]" : ""}`} />
+                  </ToolButton>
+                )}
               </div>
             </>
           )}

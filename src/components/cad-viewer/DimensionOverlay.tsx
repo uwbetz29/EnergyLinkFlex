@@ -145,8 +145,10 @@ export function DimensionOverlay({ renderer }: DimensionOverlayProps) {
     cascadeSuggestions,
     applyCascadeSuggestion,
     applyCascadeAll,
+    applyCascadeHighConfidence,
     dismissCascade,
     componentGraph,
+    constraintViolations,
   } = useCADStore();
 
   const [screenDims, setScreenDims] = useState<ScreenDimension[]>([]);
@@ -718,12 +720,28 @@ export function DimensionOverlay({ renderer }: DimensionOverlayProps) {
                   ))}
                 </div>
                 <div className="flex gap-1.5 mt-2">
-                  <button
-                    onClick={applyCascadeAll}
-                    className="flex-1 text-[10px] py-1 px-2 rounded bg-[#00BFDD] text-white font-medium hover:bg-[#00A3BE] transition-colors"
-                  >
-                    Apply All
-                  </button>
+                  {(() => {
+                    const highCount = cascadeSuggestions.filter(s => s.confidence === "high").length;
+                    const total = cascadeSuggestions.length;
+                    return (
+                      <>
+                        <button
+                          onClick={applyCascadeAll}
+                          className="flex-1 text-[10px] py-1 px-2 rounded bg-[#00BFDD] text-white font-medium hover:bg-[#00A3BE] transition-colors"
+                        >
+                          Apply All ({total})
+                        </button>
+                        {highCount > 0 && highCount < total && (
+                          <button
+                            onClick={applyCascadeHighConfidence}
+                            className="flex-1 text-[10px] py-1 px-2 rounded bg-[#93C90F] text-white font-medium hover:bg-[#7AB00D] transition-colors"
+                          >
+                            Apply High ({highCount})
+                          </button>
+                        )}
+                      </>
+                    );
+                  })()}
                   <button
                     onClick={() => {
                       dismissCascade();
@@ -737,6 +755,31 @@ export function DimensionOverlay({ renderer }: DimensionOverlayProps) {
                 </div>
               </div>
             )}
+
+            {/* Constraint violations (Feature 5) */}
+            {constraintViolations.length > 0 && (() => {
+              const dimViolations = constraintViolations.filter(v => {
+                const constraint = useCADStore.getState().constraints.find(c => c.id === v.constraintId);
+                return constraint?.dimensionIds.includes(selectedDim.id);
+              });
+              if (dimViolations.length === 0) return null;
+              return (
+                <div className="mt-2 space-y-1">
+                  {dimViolations.map(v => (
+                    <div
+                      key={v.constraintId}
+                      className={`text-[10px] px-2 py-1 rounded border ${
+                        v.severity === "error"
+                          ? "bg-red-50 border-red-200 text-red-700"
+                          : "bg-amber-50 border-amber-200 text-amber-700"
+                      }`}
+                    >
+                      {v.severity === "error" ? "\u26D4" : "\u26A0\uFE0F"} {v.label}: {v.message}
+                    </div>
+                  ))}
+                </div>
+              );
+            })()}
 
             {/* Info */}
             <div className="mt-2 text-[10px] text-[#999] space-y-0.5">

@@ -23,6 +23,7 @@ import type { ComponentGraph } from "@/types/component-recognition";
 import { propagateDimensionChange } from "./cross-page-propagate";
 import { summarizeGeometry } from "./geometry-summarizer";
 import { buildConnectivityGraph, analyzeConnectedCascade } from "./connectivity-graph";
+import type { Constraint, ConstraintViolation } from "@/types/constraints";
 
 /** A snapshot of drawing + dimensions for undo/redo */
 interface DrawingSnapshot {
@@ -104,6 +105,15 @@ interface CADStore {
   // AI component recognition
   componentGraph: ComponentGraph | null;
   isRecognizing: boolean;
+  showComponentOverlay: boolean;
+
+  // Visual diff (Feature 3)
+  originalDrawingSnapshot: ParsedDrawing | null;
+  showDiff: boolean;
+
+  // Constraints (Feature 5)
+  constraints: Constraint[];
+  constraintViolations: ConstraintViolation[];
 
   // History
   scaleHistory: ScaleOperation[];
@@ -158,6 +168,21 @@ interface CADStore {
   // Component recognition actions
   recognizeComponents: () => Promise<void>;
   clearComponentGraph: () => void;
+  toggleComponentOverlay: () => void;
+
+  // Visual diff actions (Feature 3)
+  toggleDiff: () => void;
+
+  // Batch cascade actions (Feature 2)
+  applyCascadeHighConfidence: () => void;
+
+  // Constraint engine actions (Feature 5)
+  addConstraint: (constraint: Constraint) => void;
+  removeConstraint: (constraintId: string) => void;
+  evaluateConstraints: () => void;
+
+  // Intent-based editing (Feature 6)
+  applyIntentChanges: (intent: string) => Promise<void>;
 
   /** Save the current drawing state to Supabase */
   saveCurrentDrawing: () => Promise<void>;
@@ -286,6 +311,11 @@ export const useCADStore = create<CADStore>((set, get) => ({
   cascadeSuggestions: [],
   componentGraph: null,
   isRecognizing: false,
+  showComponentOverlay: false,
+  originalDrawingSnapshot: null,
+  showDiff: false,
+  constraints: [],
+  constraintViolations: [],
   scaleHistory: [],
   undoStack: [],
   redoStack: [],
@@ -663,11 +693,20 @@ export const useCADStore = create<CADStore>((set, get) => ({
   },
 
   applyDimensionChange: (params: ModifyDimensionParams) => {
-    const { drawing, dimensions, undoStack, tabs, activeTabId } = get();
+    const { drawing, dimensions, undoStack, tabs, activeTabId, originalDrawingSnapshot, componentGraph } = get();
     if (!drawing) return;
 
+    // Capture snapshot before first edit (for visual diff)
+    if (!originalDrawingSnapshot) {
+      set({ originalDrawingSnapshot: JSON.parse(JSON.stringify(drawing)) });
+    }
+
     try {
-      const result = modifyDimension(drawing, dimensions, params);
+      // Pass component graph for smarter entity selection
+      const enrichedParams = componentGraph
+        ? { ...params, componentGraph }
+        : params;
+      const result = modifyDimension(drawing, dimensions, enrichedParams);
 
       // Sanity check: modifyDimension must return a valid drawing
       if (!result.drawing || !result.drawing.entities) {
@@ -738,6 +777,9 @@ export const useCADStore = create<CADStore>((set, get) => ({
         lastModification: result.modification,
         cascadeSuggestions: suggestions,
       });
+
+      // Evaluate constraints after change
+      get().evaluateConstraints();
 
       // Clear lastModification after flash duration
       setTimeout(() => {
@@ -1084,7 +1126,187 @@ export const useCADStore = create<CADStore>((set, get) => ({
   },
 
   clearComponentGraph: () => {
-    set({ componentGraph: null });
+    set({ componentGraph: null, showComponentOverlay: false });
+  },
+
+  toggleComponentOverlay: () => {
+    set((state) => ({ showComponentOverlay: !state.showComponentOverlay }));
+  },
+
+  toggleDiff: () => {
+    set((state) => ({ showDiff: !state.showDiff }));
+  },
+
+  applyCascadeHighConfidence: () => {
+    const { cascadeSuggestions } = get();
+    const highIndices = cascadeSuggestions
+      .map((s, i) => ({ s, i }))
+      .filter(({ s }) => s.confidence === "high")
+      .map(({ i }) => i)
+      .reverse(); // Apply from end to avoid index shifting
+    for (const idx of highIndices) {
+      // Re-fetch since each apply mutates the list
+      const current = get().cascadeSuggestions;
+      const realIdx = current.findIndex(s =>
+        cascadeSuggestions[idx] && s.dimensionId === cascadeSuggestions[idx].dimensionId
+      );
+      if (realIdx >= 0) get().applyCascadeSuggestion(realIdx);
+    }
+  },
+
+  addConstraint: (constraint: Constraint) => {
+    set((state) => ({
+      constraints: [...state.constraints, constraint],
+    }));
+    get().evaluateConstraints();
+  },
+
+  removeConstraint: (constraintId: string) => {
+    set((state) => ({
+      constraints: state.constraints.filter(c => c.id !== constraintId),
+      constraintViolations: state.constraintViolations.filter(v => v.constraintId !== constraintId),
+    }));
+  },
+
+  evaluateConstraints: () => {
+    const { constraints, dimensions } = get();
+    const violations: ConstraintViolation[] = [];
+
+    for (const constraint of constraints) {
+      const dimValues = constraint.dimensionIds
+        .map(id => dimensions.find(d => d.id === id))
+        .filter(Boolean)
+        .map(d => d!.value);
+
+      if (dimValues.length === 0) continue;
+
+      switch (constraint.type) {
+        case "sum": {
+          const sum = dimValues.reduce((a, b) => a + b, 0);
+          if (sum > constraint.threshold) {
+            violations.push({
+              constraintId: constraint.id,
+              label: constraint.label,
+              message: `Sum ${formatImperialDimension(sum)} exceeds ${formatImperialDimension(constraint.threshold)}`,
+              currentValue: sum,
+              threshold: constraint.threshold,
+              severity: constraint.severity,
+            });
+          }
+          break;
+        }
+        case "max": {
+          const maxVal = Math.max(...dimValues);
+          if (maxVal > constraint.threshold) {
+            violations.push({
+              constraintId: constraint.id,
+              label: constraint.label,
+              message: `${formatImperialDimension(maxVal)} exceeds max ${formatImperialDimension(constraint.threshold)}`,
+              currentValue: maxVal,
+              threshold: constraint.threshold,
+              severity: constraint.severity,
+            });
+          }
+          break;
+        }
+        case "min": {
+          const minVal = Math.min(...dimValues);
+          if (minVal < constraint.threshold) {
+            violations.push({
+              constraintId: constraint.id,
+              label: constraint.label,
+              message: `${formatImperialDimension(minVal)} below min ${formatImperialDimension(constraint.threshold)}`,
+              currentValue: minVal,
+              threshold: constraint.threshold,
+              severity: constraint.severity,
+            });
+          }
+          break;
+        }
+        case "clearance": {
+          // For clearance, threshold is the minimum gap
+          if (dimValues.length >= 1 && dimValues[0] < constraint.threshold) {
+            violations.push({
+              constraintId: constraint.id,
+              label: constraint.label,
+              message: `Clearance ${formatImperialDimension(dimValues[0])} below ${formatImperialDimension(constraint.threshold)}`,
+              currentValue: dimValues[0],
+              threshold: constraint.threshold,
+              severity: constraint.severity,
+            });
+          }
+          break;
+        }
+      }
+    }
+
+    set({ constraintViolations: violations });
+  },
+
+  applyIntentChanges: async (intent: string) => {
+    const { drawing, dimensions, componentGraph } = get();
+    if (!drawing || dimensions.length === 0) return;
+
+    set({ isResizing: true, resizeError: null });
+
+    try {
+      const response = await fetch("/api/ai-intent", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          intent,
+          dimensions: dimensions.map(d => ({
+            id: d.id,
+            displayText: d.displayText,
+            value: d.value,
+            direction: d.direction,
+          })),
+          componentGraph: componentGraph ? {
+            components: componentGraph.components.map(c => ({
+              id: c.id,
+              type: c.type,
+              label: c.label,
+              dimensionIds: c.dimensionIds,
+            })),
+            flowDirection: componentGraph.flowDirection,
+          } : null,
+        }),
+      });
+
+      if (!response.ok) {
+        const errBody = await response.json().catch(() => ({}));
+        throw new Error(errBody.error || `Intent failed: ${response.status}`);
+      }
+
+      const result = await response.json();
+
+      if (!result.changes || result.changes.length === 0) {
+        set({ isResizing: false, lastResizeReasoning: result.overallReasoning || "No changes needed" });
+        return;
+      }
+
+      // Apply each change sequentially
+      for (const change of result.changes) {
+        const dim = get().dimensions.find(d => d.id === change.dimensionId);
+        if (!dim) continue;
+        get().applyDimensionChange({
+          dimensionId: change.dimensionId,
+          newValue: change.newValue,
+          proportional: false,
+        });
+      }
+
+      set({
+        isResizing: false,
+        lastResizeReasoning: result.overallReasoning,
+      });
+    } catch (err) {
+      console.error("[intent] Error:", err);
+      set({
+        isResizing: false,
+        resizeError: err instanceof Error ? err.message : "Intent processing failed",
+      });
+    }
   },
 
   saveCurrentDrawing: async () => {
@@ -1203,6 +1425,11 @@ export const useCADStore = create<CADStore>((set, get) => ({
       cascadeSuggestions: [],
       componentGraph: null,
       isRecognizing: false,
+      showComponentOverlay: false,
+      originalDrawingSnapshot: null,
+      showDiff: false,
+      constraints: [],
+      constraintViolations: [],
       compositeAnalysis: null,
       isAnalyzing: false,
       analysisError: null,

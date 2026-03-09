@@ -13,7 +13,38 @@ import type {
   CascadeSuggestion,
   Point2D,
 } from "@/types/cad";
+import type { ComponentGraph } from "@/types/component-recognition";
 import { formatImperialDimension } from "./dimension-link";
+
+/** Recompute bounding box from entities */
+function recomputeBounds(entities: ParsedEntity[]): { min: Point2D; max: Point2D } {
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  for (const e of entities) {
+    if (e.vertices) {
+      for (const v of e.vertices) {
+        if (v.x < minX) minX = v.x;
+        if (v.y < minY) minY = v.y;
+        if (v.x > maxX) maxX = v.x;
+        if (v.y > maxY) maxY = v.y;
+      }
+    }
+    if (e.center) {
+      const r = e.radius || 0;
+      if (e.center.x - r < minX) minX = e.center.x - r;
+      if (e.center.y - r < minY) minY = e.center.y - r;
+      if (e.center.x + r > maxX) maxX = e.center.x + r;
+      if (e.center.y + r > maxY) maxY = e.center.y + r;
+    }
+    if (e.insertionPoint) {
+      if (e.insertionPoint.x < minX) minX = e.insertionPoint.x;
+      if (e.insertionPoint.y < minY) minY = e.insertionPoint.y;
+      if (e.insertionPoint.x > maxX) maxX = e.insertionPoint.x;
+      if (e.insertionPoint.y > maxY) maxY = e.insertionPoint.y;
+    }
+  }
+  if (!isFinite(minX)) return { min: { x: 0, y: 0 }, max: { x: 100, y: 100 } };
+  return { min: { x: minX, y: minY }, max: { x: maxX, y: maxY } };
+}
 
 /**
  * Classify an entity as "rigid" (should translate without deformation) or "stretch" (should scale).
@@ -213,6 +244,8 @@ export interface ModifyDimensionParams {
   proportional?: boolean;
   /** Which anchor to use as pivot. "auto" infers from geometry (default). */
   pivotSide?: "auto" | "anchor0" | "anchor1";
+  /** Component graph for smarter entity selection */
+  componentGraph?: ComponentGraph;
 }
 
 /**
@@ -290,6 +323,28 @@ export function modifyDimension(
   const annoHandleSet = new Set(dim.annotationHandles);
   const textHandle = dim.textHandle;
   const affectedHandles: string[] = [];
+
+  // Enrich geometry handles using component graph if available
+  // This ensures we grab the FULL component (e.g., entire stack, not just bottom half)
+  if (params.componentGraph) {
+    const comp = params.componentGraph.components.find(c => c.dimensionIds.includes(dim.id));
+    if (comp) {
+      // Add all entities within the component's bounding box
+      const bb = comp.boundingBox;
+      for (const e of drawing.entities) {
+        if (e.type === "TEXT" || e.type === "MTEXT") continue;
+        if (geoHandleSet.has(e.handle)) continue;
+        const pts = getEntityPoints(e);
+        if (pts.length === 0) continue;
+        const allInBox = pts.every(p =>
+          p.x >= bb.minX - 1 && p.x <= bb.maxX + 1 &&
+          p.y >= bb.minY - 1 && p.y <= bb.maxY + 1
+        );
+        if (allInBox) geoHandleSet.add(e.handle);
+      }
+      console.log(`[modifyDimension] Component-aware: ${comp.label} → ${geoHandleSet.size} entities`);
+    }
+  }
 
   // When geometry handles are sparse (< 5, typical for PDF-extracted drawings),
   // gather more entities by finding all geometry in a spatial column around the dimension
@@ -403,10 +458,11 @@ export function modifyDimension(
     };
   });
 
-  // Recalculate bounds
+  // Recalculate bounds from modified entities
   const newDrawing: ParsedDrawing = {
     ...drawing,
     entities: newEntities,
+    bounds: recomputeBounds(newEntities),
   };
 
   // Compute the displacement vector and moving anchor for cascade analysis
@@ -745,7 +801,7 @@ export function shiftDimension(
     };
   });
 
-  const newDrawing: ParsedDrawing = { ...drawing, entities: newEntities };
+  const newDrawing: ParsedDrawing = { ...drawing, entities: newEntities, bounds: recomputeBounds(newEntities) };
 
   const modification: DimensionModification = {
     dimensionId: dim.id,

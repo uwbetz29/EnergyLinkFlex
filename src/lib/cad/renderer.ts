@@ -8,6 +8,23 @@ import type {
   CADComponent,
   Point2D,
 } from "@/types/cad";
+import type { RecognizedComponent } from "@/types/component-recognition";
+
+// Color map for AI-recognized component types
+const COMPONENT_TYPE_COLORS: Record<string, string> = {
+  stack: "#2563EB",
+  silencer: "#16A34A",
+  "gas-path": "#EA580C",
+  "di-duct": "#9333EA",
+  "ta-duct": "#CA8A04",
+  "dist-grid-duct": "#0D9488",
+  "scr-duct": "#0891B2",
+  "inside-liner": "#DC2626",
+  nozzle: "#DB2777",
+  platform: "#6B7280",
+  ladder: "#78716C",
+  unknown: "#9CA3AF",
+};
 
 // DXF ACI color index to hex (common colors)
 const DXF_COLORS: Record<number, string> = {
@@ -54,6 +71,8 @@ export class CADRenderer {
   private componentGroups: Map<string, THREE.Group> = new Map();
   private drawing: ParsedDrawing | null = null;
   private previewGroup: THREE.Group | null = null;
+  private componentOverlayGroup: THREE.Group | null = null;
+  private diffOverlayGroup: THREE.Group | null = null;
   private dimmedHandles: Set<string> = new Set();
   private containerEl: HTMLElement | null = null;
   private isPanning = false;
@@ -692,6 +711,8 @@ export class CADRenderer {
     }
     this.entityMap.clear();
     this.componentGroups.clear();
+    this.componentOverlayGroup = null;
+    this.diffOverlayGroup = null;
   }
 
   // --- Event handlers ---
@@ -1044,6 +1065,153 @@ export class CADRenderer {
       x: ((ndcX + 1) / 2) * rect.width,
       y: ((1 - ndcY) / 2) * rect.height,
     };
+  }
+
+  // --- Component Bounding Box Overlay (Feature 1) ---
+
+  showComponentBoxes(components: RecognizedComponent[]): void {
+    this.clearComponentBoxes();
+
+    const group = new THREE.Group();
+    group.userData = { isComponentOverlay: true };
+
+    for (const comp of components) {
+      const bb = comp.boundingBox;
+      const color = COMPONENT_TYPE_COLORS[comp.type] || COMPONENT_TYPE_COLORS.unknown;
+
+      // Outline rectangle (z=2 to float above entities)
+      const rectGeo = new THREE.BufferGeometry();
+      const verts = new Float32Array([
+        bb.minX, bb.minY, 2, bb.maxX, bb.minY, 2,
+        bb.maxX, bb.maxY, 2, bb.minX, bb.maxY, 2,
+        bb.minX, bb.minY, 2,
+      ]);
+      rectGeo.setAttribute("position", new THREE.BufferAttribute(verts, 3));
+      group.add(new THREE.Line(rectGeo, new THREE.LineBasicMaterial({
+        color, transparent: true, opacity: 0.7,
+      })));
+
+      // Semi-transparent fill
+      const fillGeo = new THREE.PlaneGeometry(bb.maxX - bb.minX, bb.maxY - bb.minY);
+      const fill = new THREE.Mesh(fillGeo, new THREE.MeshBasicMaterial({
+        color, transparent: true, opacity: 0.06, side: THREE.DoubleSide,
+      }));
+      fill.position.set((bb.minX + bb.maxX) / 2, (bb.minY + bb.maxY) / 2, 1.5);
+      group.add(fill);
+
+      // Text label sprite above the box
+      const canvas = document.createElement("canvas");
+      const ctx = canvas.getContext("2d");
+      if (ctx) {
+        const label = comp.label;
+        ctx.font = "bold 28px sans-serif";
+        const metrics = ctx.measureText(label);
+        canvas.width = Math.ceil(metrics.width) + 12;
+        canvas.height = 36;
+        ctx.font = "bold 28px sans-serif";
+        ctx.fillStyle = color;
+        ctx.fillText(label, 6, 28);
+
+        const texture = new THREE.CanvasTexture(canvas);
+        texture.minFilter = THREE.LinearFilter;
+        const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: texture, transparent: true }));
+        const boxWidth = bb.maxX - bb.minX;
+        const scale = Math.max(boxWidth * 0.25, 5);
+        sprite.scale.set(scale * (canvas.width / canvas.height), scale, 1);
+        sprite.position.set((bb.minX + bb.maxX) / 2, bb.maxY + scale * 0.6, 2);
+        sprite.center.set(0.5, 0);
+        group.add(sprite);
+      }
+    }
+
+    this.componentOverlayGroup = group;
+    this.scene.add(group);
+    this.render();
+  }
+
+  clearComponentBoxes(): void {
+    if (this.componentOverlayGroup) {
+      this.scene.remove(this.componentOverlayGroup);
+      this.componentOverlayGroup.traverse((child) => {
+        if (child instanceof THREE.Line || child instanceof THREE.Mesh) {
+          child.geometry?.dispose();
+        }
+      });
+      this.componentOverlayGroup = null;
+      this.render();
+    }
+  }
+
+  // --- Visual Diff Overlay (Feature 3) ---
+
+  showDiffOverlay(originalEntities: ParsedEntity[], currentEntities: ParsedEntity[]): void {
+    this.clearDiffOverlay();
+
+    const group = new THREE.Group();
+    group.userData = { isDiffOverlay: true };
+
+    // Index current entities by handle for comparison
+    const currentMap = new Map(currentEntities.map(e => [e.handle, e]));
+
+    for (const orig of originalEntities) {
+      const current = currentMap.get(orig.handle);
+      if (!current) continue;
+
+      // Check if entity moved or changed
+      const changed = this.entityDiffers(orig, current);
+      if (!changed) continue;
+
+      // Draw original position in red dashed
+      const obj = this.createObject(orig, "#FF0000");
+      if (obj) {
+        obj.traverse((child) => {
+          if (child instanceof THREE.Line || child instanceof THREE.LineSegments) {
+            const mat = child.material as THREE.LineBasicMaterial;
+            mat.transparent = true;
+            mat.opacity = 0.4;
+          }
+        });
+        obj.position.z = 1.5;
+        group.add(obj);
+      }
+    }
+
+    this.diffOverlayGroup = group;
+    this.scene.add(group);
+    this.render();
+  }
+
+  clearDiffOverlay(): void {
+    if (this.diffOverlayGroup) {
+      this.scene.remove(this.diffOverlayGroup);
+      this.diffOverlayGroup.traverse((child) => {
+        if (child instanceof THREE.Line || child instanceof THREE.Mesh) {
+          child.geometry?.dispose();
+        }
+      });
+      this.diffOverlayGroup = null;
+      this.render();
+    }
+  }
+
+  /** Check if two entities have different geometry */
+  private entityDiffers(a: ParsedEntity, b: ParsedEntity): boolean {
+    if (a.vertices && b.vertices) {
+      if (a.vertices.length !== b.vertices.length) return true;
+      for (let i = 0; i < a.vertices.length; i++) {
+        if (Math.abs(a.vertices[i].x - b.vertices[i].x) > 0.01 ||
+            Math.abs(a.vertices[i].y - b.vertices[i].y) > 0.01) return true;
+      }
+    }
+    if (a.center && b.center) {
+      if (Math.abs(a.center.x - b.center.x) > 0.01 ||
+          Math.abs(a.center.y - b.center.y) > 0.01) return true;
+    }
+    if (a.insertionPoint && b.insertionPoint) {
+      if (Math.abs(a.insertionPoint.x - b.insertionPoint.x) > 0.01 ||
+          Math.abs(a.insertionPoint.y - b.insertionPoint.y) > 0.01) return true;
+    }
+    return false;
   }
 
   /** Convert minimap pixel coords to world coords for click-to-pan */
