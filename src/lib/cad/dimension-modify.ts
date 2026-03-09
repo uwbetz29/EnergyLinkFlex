@@ -13,7 +13,7 @@ import type {
   CascadeSuggestion,
   Point2D,
 } from "@/types/cad";
-import type { ComponentGraph } from "@/types/component-recognition";
+import type { ComponentGraph, RecognizedComponent } from "@/types/component-recognition";
 import { formatImperialDimension } from "./dimension-link";
 
 /** Recompute bounding box from entities */
@@ -135,6 +135,17 @@ function getEntityPoints(entity: ParsedEntity): Point2D[] {
   }
   if (entity.center && isFinite(entity.center.x) && isFinite(entity.center.y)) {
     points.push(entity.center);
+    // Include extent points for circles/arcs so bounding box checks
+    // capture entities whose circumference extends into the region
+    if (entity.radius && isFinite(entity.radius)) {
+      const r = entity.radius;
+      points.push(
+        { x: entity.center.x + r, y: entity.center.y },
+        { x: entity.center.x - r, y: entity.center.y },
+        { x: entity.center.x, y: entity.center.y + r },
+        { x: entity.center.x, y: entity.center.y - r },
+      );
+    }
   }
   if (entity.insertionPoint && isFinite(entity.insertionPoint.x) && isFinite(entity.insertionPoint.y)) {
     points.push(entity.insertionPoint);
@@ -233,6 +244,107 @@ function gatherSpatialColumn(
   return result;
 }
 
+/**
+ * Gather entities from downstream/connected components that should be
+ * translated (not scaled) when a primary component is resized.
+ * Uses the connectivity graph to find downstream components, plus a
+ * spatial check for components beyond the moving anchor.
+ */
+function gatherDownstreamEntities(
+  graph: ComponentGraph,
+  primaryComp: RecognizedComponent,
+  axis: Point2D,
+  movingAnchor: Point2D,
+  drawing: ParsedDrawing,
+  excludeHandles: Set<string>,
+): { handles: Set<string>; componentIds: Set<string> } {
+  const handles = new Set<string>();
+  const componentIds = new Set<string>();
+
+  // BFS from primary component to find downstream components
+  const visited = new Set<string>([primaryComp.id]);
+  const queue = [primaryComp.id];
+
+  while (queue.length > 0) {
+    const currentId = queue.shift()!;
+    for (const edge of graph.edges) {
+      // edge.from is upstream of edge.to (edge.from → edge.to in flow direction)
+      if (edge.from === currentId && edge.relationship === "upstream" && !visited.has(edge.to)) {
+        visited.add(edge.to);
+        componentIds.add(edge.to);
+        queue.push(edge.to);
+      }
+      // Lateral connected components shift if beyond moving anchor
+      if (edge.relationship === "lateral") {
+        const otherId = edge.from === currentId ? edge.to : (edge.to === currentId ? edge.from : null);
+        if (otherId && !visited.has(otherId)) {
+          const otherComp = graph.components.find(c => c.id === otherId);
+          if (otherComp) {
+            const center = {
+              x: (otherComp.boundingBox.minX + otherComp.boundingBox.maxX) / 2,
+              y: (otherComp.boundingBox.minY + otherComp.boundingBox.maxY) / 2,
+            };
+            const proj = (center.x - movingAnchor.x) * axis.x
+                       + (center.y - movingAnchor.y) * axis.y;
+            if (proj > 0) {
+              visited.add(otherId);
+              componentIds.add(otherId);
+              queue.push(otherId);
+            }
+          }
+        }
+      }
+    }
+  }
+
+  // Also find spatially-beyond components not connected by edges
+  for (const comp of graph.components) {
+    if (visited.has(comp.id)) continue;
+    const center = {
+      x: (comp.boundingBox.minX + comp.boundingBox.maxX) / 2,
+      y: (comp.boundingBox.minY + comp.boundingBox.maxY) / 2,
+    };
+    const proj = (center.x - movingAnchor.x) * axis.x
+               + (center.y - movingAnchor.y) * axis.y;
+    const compSize = Math.max(
+      comp.boundingBox.maxX - comp.boundingBox.minX,
+      comp.boundingBox.maxY - comp.boundingBox.minY
+    );
+    if (proj > compSize * 0.1) {
+      componentIds.add(comp.id);
+    }
+  }
+
+  if (componentIds.size === 0) return { handles, componentIds };
+
+  // Gather entities from downstream component bounding boxes
+  for (const compId of componentIds) {
+    const comp = graph.components.find(c => c.id === compId);
+    if (!comp) continue;
+
+    const bb = comp.boundingBox;
+    const tolX = Math.max((bb.maxX - bb.minX) * 0.05, 3);
+    const tolY = Math.max((bb.maxY - bb.minY) * 0.05, 3);
+
+    for (const e of drawing.entities) {
+      if (excludeHandles.has(e.handle)) continue;
+      if (e.type === "TEXT" || e.type === "MTEXT") continue;
+      const pts = getEntityPoints(e);
+      if (pts.length === 0) continue;
+      const anyInBox = pts.some(p =>
+        p.x >= bb.minX - tolX && p.x <= bb.maxX + tolX &&
+        p.y >= bb.minY - tolY && p.y <= bb.maxY + tolY
+      );
+      if (anyInBox) handles.add(e.handle);
+    }
+  }
+
+  // Remove already-handled entities
+  for (const h of excludeHandles) handles.delete(h);
+
+  return { handles, componentIds };
+}
+
 export interface ModifyDimensionParams {
   /** The dimension to modify */
   dimensionId: string;
@@ -325,30 +437,38 @@ export function modifyDimension(
   const affectedHandles: string[] = [];
 
   // Enrich geometry handles using component graph if available
-  // This ensures we grab the FULL component (e.g., entire stack, not just bottom half)
+  // This ensures we grab the FULL component (e.g., entire stack — both sides, all internals)
+  let primaryComponent: RecognizedComponent | undefined;
   if (params.componentGraph) {
-    const comp = params.componentGraph.components.find(c => c.dimensionIds.includes(dim.id));
-    if (comp) {
-      // Add all entities within the component's bounding box
-      const bb = comp.boundingBox;
+    primaryComponent = params.componentGraph.components.find(c => c.dimensionIds.includes(dim.id));
+    if (primaryComponent) {
+      const bb = primaryComponent.boundingBox;
+      const bbW = bb.maxX - bb.minX;
+      const bbH = bb.maxY - bb.minY;
+      // Proportional tolerance: 5% of box dimensions, minimum 3 units
+      const tolX = Math.max(bbW * 0.05, 3);
+      const tolY = Math.max(bbH * 0.05, 3);
       for (const e of drawing.entities) {
         if (e.type === "TEXT" || e.type === "MTEXT") continue;
         if (geoHandleSet.has(e.handle)) continue;
         const pts = getEntityPoints(e);
         if (pts.length === 0) continue;
-        const allInBox = pts.every(p =>
-          p.x >= bb.minX - 1 && p.x <= bb.maxX + 1 &&
-          p.y >= bb.minY - 1 && p.y <= bb.maxY + 1
+        // Include if ANY point is within the expanded bounding box.
+        // This catches entities crossing component boundaries (e.g.,
+        // right-side lines, connection points extending into adjacent areas)
+        const anyInBox = pts.some(p =>
+          p.x >= bb.minX - tolX && p.x <= bb.maxX + tolX &&
+          p.y >= bb.minY - tolY && p.y <= bb.maxY + tolY
         );
-        if (allInBox) geoHandleSet.add(e.handle);
+        if (anyInBox) geoHandleSet.add(e.handle);
       }
-      console.log(`[modifyDimension] Component-aware: ${comp.label} → ${geoHandleSet.size} entities`);
+      console.log(`[modifyDimension] Component-aware: ${primaryComponent.label} → ${geoHandleSet.size} entities`);
     }
   }
 
-  // When geometry handles are sparse (< 5, typical for PDF-extracted drawings),
-  // gather more entities by finding all geometry in a spatial column around the dimension
-  if (geoHandleSet.size < 5) {
+  // Always run spatial column gathering to supplement component enrichment
+  // (catches entities outside the component bbox but along the dimension axis)
+  {
     const knownGeo = drawing.entities.filter(e => geoHandleSet.has(e.handle));
     const excludeHandles = new Set([textHandle, ...dim.annotationHandles]);
     const spatialHandles = gatherSpatialColumn(dim, drawing.entities, knownGeo, excludeHandles);
@@ -357,7 +477,7 @@ export function modifyDimension(
     }
     geoHandleSet.delete(textHandle);
     console.log(
-      `[modifyDimension] Spatial gathering: ${dim.geometryHandles.length} → ${geoHandleSet.size} geometry entities`
+      `[modifyDimension] After spatial gathering: ${geoHandleSet.size} total geometry entities`
     );
   }
 
@@ -444,18 +564,66 @@ export function modifyDimension(
     }
   }
 
-  // Update the dimension's stored value and anchor points
+  // Compute displacement vector and moving anchor
+  const valueDelta = newValue - dim.value;
+  const displacement: Point2D = { x: axis.x * valueDelta, y: axis.y * valueDelta };
+  const movingAnchorBefore: Point2D =
+    (pivot.x === dim.anchorPoints[0].x && pivot.y === dim.anchorPoints[0].y)
+      ? dim.anchorPoints[1]
+      : dim.anchorPoints[0];
+
+  // Auto-translate connected downstream components so everything stays in continuity.
+  // When the stack gets taller, the silencer/SCR/everything above shifts up automatically.
+  let translatedCompIds = new Set<string>();
+  if (params.componentGraph && primaryComponent) {
+    const excludeSet = new Set([...geoHandleSet, ...annoHandleSet, textHandle]);
+    const downstream = gatherDownstreamEntities(
+      params.componentGraph, primaryComponent, axis, movingAnchorBefore, drawing, excludeSet
+    );
+    translatedCompIds = downstream.componentIds;
+
+    for (const entity of newEntities) {
+      if (downstream.handles.has(entity.handle)) {
+        translateEntity(entity, displacement);
+        affectedHandles.push(entity.handle);
+      }
+    }
+
+    if (downstream.handles.size > 0) {
+      console.log(
+        `[modifyDimension] Auto-translated ${downstream.handles.size} entities from ${downstream.componentIds.size} downstream components`
+      );
+    }
+  }
+
+  // Update dimensions: primary dimension gets scaled anchors,
+  // downstream component dimensions get shifted anchors
   const newDimensions = dimensions.map((d) => {
-    if (d.id !== dim.id) return d;
-    return {
-      ...d,
-      value: newValue,
-      displayText: formatImperialDimension(newValue),
-      anchorPoints: [
-        scalePoint(d.anchorPoints[0]),
-        scalePoint(d.anchorPoints[1]),
-      ] as [Point2D, Point2D],
-    };
+    if (d.id === dim.id) {
+      return {
+        ...d,
+        value: newValue,
+        displayText: formatImperialDimension(newValue),
+        anchorPoints: [
+          scalePoint(d.anchorPoints[0]),
+          scalePoint(d.anchorPoints[1]),
+        ] as [Point2D, Point2D],
+      };
+    }
+    // Shift anchor points for dimensions belonging to auto-translated components
+    if (translatedCompIds.size > 0 && params.componentGraph) {
+      const dimOwner = params.componentGraph.components.find(c => c.dimensionIds.includes(d.id));
+      if (dimOwner && translatedCompIds.has(dimOwner.id)) {
+        return {
+          ...d,
+          anchorPoints: [
+            { x: d.anchorPoints[0].x + displacement.x, y: d.anchorPoints[0].y + displacement.y },
+            { x: d.anchorPoints[1].x + displacement.x, y: d.anchorPoints[1].y + displacement.y },
+          ] as [Point2D, Point2D],
+        };
+      }
+    }
+    return d;
   });
 
   // Recalculate bounds from modified entities
@@ -464,15 +632,6 @@ export function modifyDimension(
     entities: newEntities,
     bounds: recomputeBounds(newEntities),
   };
-
-  // Compute the displacement vector and moving anchor for cascade analysis
-  const valueDelta = newValue - dim.value;
-  const displacement: Point2D = { x: axis.x * valueDelta, y: axis.y * valueDelta };
-  // The "moving anchor" is the non-pivot end (before the resize)
-  const movingAnchorBefore: Point2D =
-    (pivot.x === dim.anchorPoints[0].x && pivot.y === dim.anchorPoints[0].y)
-      ? dim.anchorPoints[1]
-      : dim.anchorPoints[0];
 
   const modification: DimensionModification = {
     dimensionId: dim.id,

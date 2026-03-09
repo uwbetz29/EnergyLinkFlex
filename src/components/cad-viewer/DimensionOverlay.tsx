@@ -166,6 +166,10 @@ export function DimensionOverlay({ renderer }: DimensionOverlayProps) {
   // Percent input (percent mode)
   const [editPercent, setEditPercent] = useState("100");
 
+  // Draggable popup state
+  const [dragOffset, setDragOffset] = useState<{ x: number; y: number } | null>(null);
+  const dragStartRef = useRef<{ mouseX: number; mouseY: number; origX: number; origY: number } | null>(null);
+
   const feetInputRef = useRef<HTMLInputElement>(null);
   const percentInputRef = useRef<HTMLInputElement>(null);
 
@@ -285,6 +289,36 @@ export function DimensionOverlay({ renderer }: DimensionOverlayProps) {
     }
   }, [selectedDimensionId, renderer]);
 
+  // Drag handlers for popup (global mouse tracking)
+  useEffect(() => {
+    if (!dragStartRef.current) return;
+    const handleMouseMove = (e: MouseEvent) => {
+      if (!dragStartRef.current) return;
+      const dx = e.clientX - dragStartRef.current.mouseX;
+      const dy = e.clientY - dragStartRef.current.mouseY;
+      setDragOffset({ x: dragStartRef.current.origX + dx, y: dragStartRef.current.origY + dy });
+    };
+    const handleMouseUp = () => {
+      dragStartRef.current = null;
+    };
+    window.addEventListener("mousemove", handleMouseMove);
+    window.addEventListener("mouseup", handleMouseUp);
+    return () => {
+      window.removeEventListener("mousemove", handleMouseMove);
+      window.removeEventListener("mouseup", handleMouseUp);
+    };
+  });
+
+  const handleDragStart = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    dragStartRef.current = {
+      mouseX: e.clientX,
+      mouseY: e.clientY,
+      origX: dragOffset?.x ?? 0,
+      origY: dragOffset?.y ?? 0,
+    };
+  }, [dragOffset]);
+
   const handleDimClick = useCallback(
     (dimId: string) => {
       const dim = dimensions.find((d) => d.id === dimId);
@@ -303,6 +337,7 @@ export function DimensionOverlay({ renderer }: DimensionOverlayProps) {
       setApplied(false);
       setUserInstruction("");
       setPivotSide("auto");
+      setDragOffset(null);
       clearResizeError();
     },
     [dimensions, selectDimension, clearResizeError]
@@ -448,18 +483,25 @@ export function DimensionOverlay({ renderer }: DimensionOverlayProps) {
         const viewportW = typeof window !== "undefined" ? window.innerWidth : 1000;
         const popupH = cascadeSuggestions.length > 0 ? 520 : 380; // estimated popup height
         const flipUp = screenDim.screenPos.y + popupH > viewportH;
+        const baseLeft = Math.max(160, Math.min(screenDim.screenPos.x, viewportW - 160));
+        const baseTop = Math.max(8, flipUp ? screenDim.screenPos.y - popupH - 8 : screenDim.screenPos.y + 8);
         return (
           <div
             className="absolute z-30 bg-white rounded-lg shadow-xl border border-[#D4D4D4] p-3 w-80"
             style={{
-              left: Math.max(160, Math.min(screenDim.screenPos.x, viewportW - 160)),
-              top: Math.max(8, flipUp ? screenDim.screenPos.y - popupH - 8 : screenDim.screenPos.y + 8),
+              left: baseLeft + (dragOffset?.x ?? 0),
+              top: baseTop + (dragOffset?.y ?? 0),
               transform: "translateX(-50%)",
             }}
             onClick={(e) => e.stopPropagation()}
           >
-            <div className="text-xs text-[#999] mb-1.5 font-medium">
-              Edit Dimension {isDiameter && <span className="text-[#93C90F]">(Diameter)</span>}
+            {/* Drag handle */}
+            <div
+              className="flex items-center justify-between cursor-grab active:cursor-grabbing mb-1 -mt-1 -mx-1 px-1 pt-1 rounded-t-lg hover:bg-[#F8F8F8]"
+              onMouseDown={handleDragStart}
+            >
+              <div className="text-xs text-[#999] font-medium">
+                Edit Dimension {isDiameter && <span className="text-[#93C90F]">(Diameter)</span>}
               {componentGraph && (() => {
                 const comp = componentGraph.components.find(c => c.dimensionIds.includes(selectedDim.id));
                 return comp ? (
@@ -468,6 +510,8 @@ export function DimensionOverlay({ renderer }: DimensionOverlayProps) {
                   </span>
                 ) : null;
               })()}
+              </div>
+              <div className="text-[9px] text-[#CCC] select-none">&#x2630;</div>
             </div>
 
             {/* Mode toggle */}

@@ -82,6 +82,16 @@ export class CADRenderer {
   private minimapCanvas: HTMLCanvasElement | null = null;
   private viewChangeCallbacks: Array<() => void> = [];
 
+  // Smooth zoom animation state
+  private zoomAnimId: number | null = null;
+  private zoomTarget = { left: 0, right: 0, top: 0, bottom: 0 };
+  private zoomCurrent = { left: 0, right: 0, top: 0, bottom: 0 };
+
+  // Pan momentum state
+  private panVelocity = { x: 0, y: 0 };
+  private lastPanTime = 0;
+  private momentumAnimId: number | null = null;
+
   constructor() {
     this.scene = new THREE.Scene();
     this.scene.background = new THREE.Color("#FFFFFF");
@@ -102,7 +112,7 @@ export class CADRenderer {
     this.renderer.setPixelRatio(window.devicePixelRatio);
     container.appendChild(this.renderer.domElement);
 
-    this.renderer.domElement.addEventListener("wheel", this.onWheel);
+    this.renderer.domElement.addEventListener("wheel", this.onWheel, { passive: false });
     this.renderer.domElement.addEventListener("mousedown", this.onMouseDown);
     this.renderer.domElement.addEventListener("mousemove", this.onMouseMove);
     window.addEventListener("mouseup", this.onMouseUp);
@@ -112,6 +122,10 @@ export class CADRenderer {
   }
 
   unmount(): void {
+    // Cancel any running animations
+    if (this.zoomAnimId) { cancelAnimationFrame(this.zoomAnimId); this.zoomAnimId = null; }
+    if (this.momentumAnimId) { cancelAnimationFrame(this.momentumAnimId); this.momentumAnimId = null; }
+
     if (this.containerEl) {
       this.renderer.domElement.removeEventListener("wheel", this.onWheel);
       this.renderer.domElement.removeEventListener("mousedown", this.onMouseDown);
@@ -719,7 +733,13 @@ export class CADRenderer {
 
   private onWheel = (event: WheelEvent): void => {
     event.preventDefault();
-    const zoomFactor = event.deltaY > 0 ? 1.1 : 0.9;
+    const zoomFactor = event.deltaY > 0 ? 1.12 : 0.89;
+
+    // Use current target as starting point if animating, otherwise use camera
+    const startLeft = this.zoomAnimId ? this.zoomTarget.left : this.camera.left;
+    const startRight = this.zoomAnimId ? this.zoomTarget.right : this.camera.right;
+    const startTop = this.zoomAnimId ? this.zoomTarget.top : this.camera.top;
+    const startBottom = this.zoomAnimId ? this.zoomTarget.bottom : this.camera.bottom;
 
     // Zoom toward cursor position
     if (this.containerEl) {
@@ -727,40 +747,76 @@ export class CADRenderer {
       const mouseX = ((event.clientX - rect.left) / rect.width) * 2 - 1;
       const mouseY = -((event.clientY - rect.top) / rect.height) * 2 + 1;
 
-      const worldX = ((mouseX + 1) / 2) * (this.camera.right - this.camera.left) + this.camera.left;
-      const worldY = ((mouseY + 1) / 2) * (this.camera.top - this.camera.bottom) + this.camera.bottom;
+      const worldX = ((mouseX + 1) / 2) * (startRight - startLeft) + startLeft;
+      const worldY = ((mouseY + 1) / 2) * (startTop - startBottom) + startBottom;
 
-      const newLeft = worldX + (this.camera.left - worldX) * zoomFactor;
-      const newRight = worldX + (this.camera.right - worldX) * zoomFactor;
-      const newTop = worldY + (this.camera.top - worldY) * zoomFactor;
-      const newBottom = worldY + (this.camera.bottom - worldY) * zoomFactor;
-
-      this.camera.left = newLeft;
-      this.camera.right = newRight;
-      this.camera.top = newTop;
-      this.camera.bottom = newBottom;
+      this.zoomTarget.left = worldX + (startLeft - worldX) * zoomFactor;
+      this.zoomTarget.right = worldX + (startRight - worldX) * zoomFactor;
+      this.zoomTarget.top = worldY + (startTop - worldY) * zoomFactor;
+      this.zoomTarget.bottom = worldY + (startBottom - worldY) * zoomFactor;
     } else {
-      const centerX = (this.camera.left + this.camera.right) / 2;
-      const centerY = (this.camera.top + this.camera.bottom) / 2;
-      const halfWidth = (this.camera.right - this.camera.left) / 2;
-      const halfHeight = (this.camera.top - this.camera.bottom) / 2;
-      this.camera.left = centerX - halfWidth * zoomFactor;
-      this.camera.right = centerX + halfWidth * zoomFactor;
-      this.camera.top = centerY + halfHeight * zoomFactor;
-      this.camera.bottom = centerY - halfHeight * zoomFactor;
+      const centerX = (startLeft + startRight) / 2;
+      const centerY = (startTop + startBottom) / 2;
+      const halfWidth = (startRight - startLeft) / 2;
+      const halfHeight = (startTop - startBottom) / 2;
+      this.zoomTarget.left = centerX - halfWidth * zoomFactor;
+      this.zoomTarget.right = centerX + halfWidth * zoomFactor;
+      this.zoomTarget.top = centerY + halfHeight * zoomFactor;
+      this.zoomTarget.bottom = centerY - halfHeight * zoomFactor;
     }
+
+    // Start smooth animation if not already running
+    if (!this.zoomAnimId) {
+      this.animateZoom();
+    }
+  };
+
+  private animateZoom = (): void => {
+    const ease = 0.25; // Lerp factor (0 = no move, 1 = instant snap)
+    this.camera.left += (this.zoomTarget.left - this.camera.left) * ease;
+    this.camera.right += (this.zoomTarget.right - this.camera.right) * ease;
+    this.camera.top += (this.zoomTarget.top - this.camera.top) * ease;
+    this.camera.bottom += (this.zoomTarget.bottom - this.camera.bottom) * ease;
 
     this.camera.updateProjectionMatrix();
     this.render();
     this.notifyViewChange();
+
+    // Check if close enough to stop
+    const maxDiff = Math.max(
+      Math.abs(this.zoomTarget.left - this.camera.left),
+      Math.abs(this.zoomTarget.right - this.camera.right),
+      Math.abs(this.zoomTarget.top - this.camera.top),
+      Math.abs(this.zoomTarget.bottom - this.camera.bottom),
+    );
+    if (maxDiff > 0.01) {
+      this.zoomAnimId = requestAnimationFrame(this.animateZoom);
+    } else {
+      // Snap to target
+      this.camera.left = this.zoomTarget.left;
+      this.camera.right = this.zoomTarget.right;
+      this.camera.top = this.zoomTarget.top;
+      this.camera.bottom = this.zoomTarget.bottom;
+      this.camera.updateProjectionMatrix();
+      this.render();
+      this.notifyViewChange();
+      this.zoomAnimId = null;
+    }
   };
 
   private onMouseDown = (event: MouseEvent): void => {
     // Left click or middle click starts panning
     if (event.button === 0 || event.button === 1) {
+      // Stop any momentum animation
+      if (this.momentumAnimId) {
+        cancelAnimationFrame(this.momentumAnimId);
+        this.momentumAnimId = null;
+      }
       this.isPanning = true;
       this.hasPanned = false;
       this.panStart = { x: event.clientX, y: event.clientY };
+      this.panVelocity = { x: 0, y: 0 };
+      this.lastPanTime = performance.now();
       this.cameraStart = {
         x: (this.camera.left + this.camera.right) / 2,
         y: (this.camera.top + this.camera.bottom) / 2,
@@ -785,6 +841,20 @@ export class CADRenderer {
       const worldDx = (-dx / rect.width) * worldWidth;
       const worldDy = (dy / rect.height) * worldHeight;
 
+      // Track velocity for momentum
+      const now = performance.now();
+      const dt = now - this.lastPanTime;
+      if (dt > 0) {
+        const prevCenterX = (this.camera.left + this.camera.right) / 2;
+        const prevCenterY = (this.camera.top + this.camera.bottom) / 2;
+        const newCX = this.cameraStart.x + worldDx;
+        const newCY = this.cameraStart.y + worldDy;
+        // Exponential moving average for smooth velocity tracking
+        this.panVelocity.x = this.panVelocity.x * 0.5 + ((newCX - prevCenterX) / dt) * 0.5;
+        this.panVelocity.y = this.panVelocity.y * 0.5 + ((newCY - prevCenterY) / dt) * 0.5;
+        this.lastPanTime = now;
+      }
+
       const halfWidth = worldWidth / 2;
       const halfHeight = worldHeight / 2;
       const newCenterX = this.cameraStart.x + worldDx;
@@ -801,8 +871,48 @@ export class CADRenderer {
   };
 
   private onMouseUp = (): void => {
+    const wasPanning = this.isPanning;
     this.isPanning = false;
     this.renderer.domElement.style.cursor = "default";
+
+    // Apply momentum if the pan had meaningful velocity
+    if (wasPanning && this.hasPanned) {
+      const speed = Math.sqrt(this.panVelocity.x ** 2 + this.panVelocity.y ** 2);
+      if (speed > 0.01) {
+        this.animateMomentum();
+      }
+    }
+  };
+
+  private animateMomentum = (): void => {
+    const friction = 0.92;
+    this.panVelocity.x *= friction;
+    this.panVelocity.y *= friction;
+
+    const speed = Math.sqrt(this.panVelocity.x ** 2 + this.panVelocity.y ** 2);
+    if (speed < 0.005) {
+      this.momentumAnimId = null;
+      return;
+    }
+
+    const dt = 16; // ~60fps frame time
+    const dx = this.panVelocity.x * dt;
+    const dy = this.panVelocity.y * dt;
+
+    const halfWidth = (this.camera.right - this.camera.left) / 2;
+    const halfHeight = (this.camera.top - this.camera.bottom) / 2;
+    const cx = (this.camera.left + this.camera.right) / 2 + dx;
+    const cy = (this.camera.top + this.camera.bottom) / 2 + dy;
+
+    this.camera.left = cx - halfWidth;
+    this.camera.right = cx + halfWidth;
+    this.camera.top = cy + halfHeight;
+    this.camera.bottom = cy - halfHeight;
+    this.camera.updateProjectionMatrix();
+    this.render();
+    this.notifyViewChange();
+
+    this.momentumAnimId = requestAnimationFrame(this.animateMomentum);
   };
 
   /** Returns true if the user just finished a drag (not a click) */
