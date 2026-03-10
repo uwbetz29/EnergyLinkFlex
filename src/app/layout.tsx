@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import localFont from "next/font/local";
 import { Geist_Mono } from "next/font/google";
 import { AuthProvider } from "@/components/providers/auth-provider";
-import { DevBanner } from "@/components/layout/dev-banner";
+import { DevBanner } from "@/components/dev-banner";
 import "./globals.css";
 
 const overpass = localFont({
@@ -27,8 +27,7 @@ const geistMono = Geist_Mono({
 
 export const metadata: Metadata = {
   title: "EnergyLink FLEX",
-  description:
-    "Scale power generation CAD drawing components in seconds. Upload DXF/DWG drawings, click components, enter new dimensions, and export updated drawings.",
+  description: "EnergyLink FLEX — Engineering drawing tools for power generation systems",
 };
 
 export default function RootLayout({

@@ -133,8 +133,8 @@ export function CreateUserDialog({
                   onClick={() => setRole(r)}
                   className={`px-3 py-1.5 rounded-lg text-xs font-medium border transition-colors ${
                     role === r
-                      ? "bg-[#93C90F]/10 border-[#93C90F] text-[#5A7E00]"
-                      : "bg-white border-[#E7E7E7] text-[#666] hover:border-[#93C90F]/40 hover:bg-[#93C90F]/5"
+                      ? "bg-[#002e81]/10 border-[#002e81] text-[#001a4d]"
+                      : "bg-white border-[#E7E7E7] text-[#666] hover:border-[#002e81]/40 hover:bg-[#002e81]/5"
                   }`}
                 >
                   {r === "super_admin"
@@ -152,7 +152,7 @@ export function CreateUserDialog({
             <Button
               type="submit"
               disabled={loading}
-              className="bg-[#93C90F] hover:bg-[#86BB46] text-white"
+              className="bg-[#002e81] hover:bg-[#0a3d99] text-white"
             >
               {loading ? "Creating..." : "Create User"}
             </Button>

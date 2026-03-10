@@ -48,47 +48,59 @@
 }
 
 :root {
-  /* EnergyLink brand colors */
-  --el-green: #93C90F;
-  --el-green-dark: #7AB00D;
-  --el-cyan: #00BFDD;
-  --el-dark: #0C121D;
-  --el-gray: #666666;
-  --el-light: #F0F0F0;
-  --el-border: #D4D4D4;
+  /* EnergyLink FLEX brand — blue palette (mapped from VisibleKit purple) */
+  --brand: #002e81;
+  --brand-dark: #001a4d;
+  --brand-deep: #0a3d99;
+  --brand-light: #1a5cb8;
+  --brand-mid: #4a7ab8;
+  --brand-soft: #6b8ab8;
+  --brand-muted: #7a9fd0;
+  --brand-faded: #9fb5d0;
+  --brand-hint: #a0c0e6;
+  --brand-pale: #e6eeff;
+  --brand-mist: #eef3ff;
 
+  /* Glass morphism tokens */
+  --glass-bg: rgba(255, 255, 255, 0.82);
+  --glass-border: rgba(0, 60, 160, 0.20);
+  --shadow-sm: 0 2px 8px rgba(0, 30, 100, 0.08), 0 1px 2px rgba(0, 30, 100, 0.06);
+  --shadow-md: 0 4px 20px rgba(0, 30, 100, 0.12), 0 2px 6px rgba(0, 30, 100, 0.08);
+  --shadow-lg: 0 8px 40px rgba(0, 30, 100, 0.16), 0 4px 12px rgba(0, 30, 100, 0.10);
+
+  /* shadcn overrides */
   --background: #FFFFFF;
   --foreground: #0C121D;
   --card: #FFFFFF;
   --card-foreground: #0C121D;
   --popover: #FFFFFF;
   --popover-foreground: #0C121D;
-  --primary: #93C90F;
+  --primary: #002e81;
   --primary-foreground: #FFFFFF;
-  --secondary: #F0F0F0;
-  --secondary-foreground: #333333;
+  --secondary: #e6eeff;
+  --secondary-foreground: #001a4d;
   --muted: #F0F0F0;
   --muted-foreground: #666666;
-  --accent: #00BFDD;
+  --accent: #1a5cb8;
   --accent-foreground: #FFFFFF;
   --destructive: oklch(0.58 0.22 27);
-  --border: #D4D4D4;
-  --input: #CBCBCB;
-  --ring: #93C90F;
-  --chart-1: #93C90F;
-  --chart-2: #00BFDD;
-  --chart-3: #86BB46;
-  --chart-4: oklch(0.488 0.243 264.376);
-  --chart-5: oklch(0.424 0.199 265.638);
-  --radius: 0.625rem;
+  --border: rgba(0, 60, 160, 0.18);
+  --input: rgba(0, 60, 160, 0.18);
+  --ring: #002e81;
+  --chart-1: #002e81;
+  --chart-2: #1a5cb8;
+  --chart-3: #4a7ab8;
+  --chart-4: #7a9fd0;
+  --chart-5: #a0c0e6;
+  --radius: 0.875rem;
   --sidebar: oklch(0.985 0 0);
   --sidebar-foreground: oklch(0.145 0 0);
-  --sidebar-primary: oklch(0.205 0 0);
-  --sidebar-primary-foreground: oklch(0.985 0 0);
-  --sidebar-accent: oklch(0.97 0 0);
-  --sidebar-accent-foreground: oklch(0.205 0 0);
-  --sidebar-border: oklch(0.922 0 0);
-  --sidebar-ring: oklch(0.708 0 0);
+  --sidebar-primary: #002e81;
+  --sidebar-primary-foreground: #FFFFFF;
+  --sidebar-accent: #e6eeff;
+  --sidebar-accent-foreground: #001a4d;
+  --sidebar-border: rgba(0, 60, 160, 0.12);
+  --sidebar-ring: #002e81;
 }
 
 .dark {
@@ -135,4 +147,67 @@
   html {
     @apply font-sans;
   }
+}
+
+/* ─── Brand background (shared by login + start page) ─── */
+.brand-bg {
+  background: radial-gradient(ellipse at 40% 40%, #eef3ff 0%, #e6eeff 40%, #d0ddfa 100%);
+  position: relative;
+}
+
+/* Grain texture overlay (matches VisibleKit) */
+.brand-bg::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  opacity: 0.04;
+  pointer-events: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='300' height='300'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.8' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='300' height='300' filter='url(%23n)' opacity='1'/%3E%3C/svg%3E");
+  background-repeat: repeat;
+}
+
+/* ─── Glass card ─── */
+.glass-card {
+  background: var(--glass-bg);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  border: 1.5px solid var(--glass-border);
+  box-shadow:
+    0 2px 8px rgba(0, 30, 100, 0.06),
+    0 8px 32px rgba(0, 30, 100, 0.10),
+    inset 0 1px 0 rgba(255, 255, 255, 0.9);
+}
+
+/* ─── Animations ─── */
+@keyframes rise {
+  from {
+    opacity: 0;
+    transform: translateY(14px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.animate-rise {
+  animation: rise 0.45s cubic-bezier(0.22, 0.61, 0.36, 1) both;
+}
+
+.animate-rise-1 { animation-delay: 0s; }
+.animate-rise-2 { animation-delay: 0.06s; }
+.animate-rise-3 { animation-delay: 0.12s; }
+.animate-rise-4 { animation-delay: 0.18s; }
+.animate-rise-5 { animation-delay: 0.24s; }
+
+@keyframes shake {
+  0%, 100% { transform: translateX(0); }
+  20% { transform: translateX(-6px); }
+  40% { transform: translateX(6px); }
+  60% { transform: translateX(-4px); }
+  80% { transform: translateX(4px); }
+}
+
+.animate-shake {
+  animation: shake 0.4s ease-in-out;
 }

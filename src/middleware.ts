@@ -5,7 +5,6 @@ const publicRoutes = [
   "/auth/callback",
   "/auth/reset-password",
   "/auth/update-password",
-  "/test-viewer",
 ];
 
 export async function middleware(request: NextRequest) {
@@ -34,6 +33,6 @@ export async function middleware(request: NextRequest) {
 
 export const config = {
   matcher: [
-    "/((?!_next/static|_next/image|favicon.ico|api/|.*\\.(?:svg|png|jpg|jpeg|gif|webp|woff|woff2|ttf|json)$).*)",
+    "/((?!_next/static|_next/image|favicon.ico|api/|.*\\.(?:svg|png|jpg|jpeg|gif|webp|woff|woff2|ttf|json|pdf|js|mjs)$).*)",
   ],
 };

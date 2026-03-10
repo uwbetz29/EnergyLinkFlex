@@ -2,8 +2,6 @@
 
 import { useState } from "react";
 import { createClient } from "@/lib/supabase/client";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import Image from "next/image";
 import Link from "next/link";
 
@@ -32,41 +30,41 @@ export default function ResetPasswordPage() {
   };
 
   return (
-    <div className="min-h-screen bg-gradient-to-b from-[#EDF5E0] via-[#F0F7E6] to-[#E8F0DB] flex flex-col items-center justify-center px-4">
+    <div className="brand-bg min-h-screen flex flex-col items-center justify-center px-4">
       <div className="w-full max-w-[400px]">
-        <div className="flex justify-center mb-8">
+        <div className="flex justify-center mb-6 animate-rise animate-rise-1">
           <Image
             src="/logo.png"
             alt="EnergyLink FLEX"
-            width={706}
-            height={149}
-            className="w-[280px] h-auto"
+            width={418}
+            height={156}
+            className="w-[clamp(180px,40vw,280px)] h-auto"
             priority
           />
         </div>
 
-        <div className="bg-white/90 backdrop-blur-sm rounded-2xl border border-[#D4E4B8] p-8 shadow-sm">
-          <h2 className="text-lg font-semibold text-[#222] mb-2">
+        <div className="glass-card rounded-[24px] p-8 animate-rise animate-rise-3">
+          <h2 className="text-lg font-bold text-[#001a4d] mb-2">
             Reset Password
           </h2>
-          <p className="text-sm text-[#888] mb-6">
-            Enter your email and we'll send you a reset link.
+          <p className="text-sm text-[#6b8ab8] mb-6">
+            Enter your email and we&apos;ll send you a reset link.
           </p>
 
           {error && (
-            <div className="mb-4 p-3 rounded-lg bg-red-50 border border-red-200 text-sm text-red-600">
+            <div className="mb-4 p-3 rounded-xl bg-red-50 border border-red-200 text-sm text-red-600 animate-shake">
               {error}
             </div>
           )}
 
           {sent ? (
             <div className="space-y-4">
-              <div className="p-3 rounded-lg bg-green-50 border border-green-200 text-sm text-green-700">
+              <div className="p-3 rounded-xl bg-green-50 border border-green-200 text-sm text-green-700">
                 Check your email for a password reset link.
               </div>
               <Link
                 href="/login"
-                className="block text-center text-sm text-[#93C90F] hover:text-[#7AB00D] font-medium"
+                className="block text-center text-sm text-[#1a5cb8] hover:text-[#002e81] font-semibold transition-colors"
               >
                 Back to Sign In
               </Link>
@@ -74,28 +72,40 @@ export default function ResetPasswordPage() {
           ) : (
             <form onSubmit={handleSubmit} className="space-y-4">
               <div>
-                <label className="text-sm font-medium text-[#555] mb-1 block">
+                <label className="text-xs font-semibold text-[#4a5b7a] mb-1.5 block">
                   Email
                 </label>
-                <Input
+                <input
                   type="email"
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
                   placeholder="you@example.com"
                   required
                   autoFocus
+                  className="w-full h-11 px-4 rounded-full text-sm
+                             bg-white/70 border-[1.5px] border-[rgba(0,60,160,0.15)]
+                             text-[#001a4d] placeholder-[#a5b8d4]
+                             focus:outline-none focus:border-[#1a5cb8] focus:ring-2 focus:ring-[rgba(0,46,129,0.15)]
+                             transition-all duration-150"
                 />
               </div>
-              <Button
+              <button
                 type="submit"
                 disabled={loading}
-                className="w-full h-11 bg-[#93C90F] hover:bg-[#86BB46] text-white font-medium"
+                className="w-full h-11 rounded-full text-sm font-bold text-white
+                           hover:-translate-y-[1px] active:translate-y-0
+                           disabled:opacity-60 disabled:cursor-not-allowed
+                           transition-all duration-150 cursor-pointer"
+                style={{
+                  background: "linear-gradient(135deg, #1a5cb8 0%, #002e81 100%)",
+                  boxShadow: "0 4px 16px rgba(0,46,129,0.3)",
+                }}
               >
                 {loading ? "Sending..." : "Send Reset Link"}
-              </Button>
+              </button>
               <Link
                 href="/login"
-                className="block text-center text-sm text-[#888] hover:text-[#555]"
+                className="block text-center text-sm text-[#6b8ab8] hover:text-[#001a4d] font-semibold transition-colors"
               >
                 Back to Sign In
               </Link>

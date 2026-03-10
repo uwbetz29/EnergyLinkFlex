@@ -1,0 +1,1161 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>EnergyLink FLEX — GA Editor Mockup</title>
+<link href="https://fonts.googleapis.com/css2?family=Overpass:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+html, body { height: 100%; overflow: hidden; }
+body {
+  font-family: 'Overpass', -apple-system, sans-serif;
+  background: #0a1628;
+  color: #0c121d;
+  display: flex;
+  flex-direction: column;
+}
+
+:root {
+  --brand: #002e81;
+  --brand-dark: #001a4d;
+  --brand-deep: #0a3d99;
+  --brand-light: #1a5cb8;
+  --brand-mid: #4a7ab8;
+  --brand-soft: #6b8ab8;
+  --brand-muted: #a5b8d4;
+  --brand-pale: #e6eeff;
+  --brand-mist: #eef3ff;
+  --glass-bg: rgba(255,255,255,0.92);
+  --glass-border: rgba(0,60,160,0.15);
+  --shadow-sm: 0 2px 8px rgba(0,30,100,0.08);
+  --shadow-md: 0 4px 20px rgba(0,30,100,0.12);
+  --shadow-lg: 0 8px 40px rgba(0,30,100,0.16);
+}
+
+/* ─── Top Bar ─── */
+.topbar {
+  height: 52px;
+  background: linear-gradient(135deg, #001030 0%, #001a4d 50%, #002e81 100%);
+  display: flex;
+  align-items: center;
+  padding: 0 16px;
+  gap: 14px;
+  flex-shrink: 0;
+  z-index: 100;
+  border-bottom: 1px solid rgba(255,255,255,0.06);
+}
+.topbar-logo {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: #fff;
+  font-weight: 700;
+  font-size: 14px;
+  letter-spacing: 0.3px;
+  white-space: nowrap;
+}
+.topbar-logo .flex-mark {
+  background: linear-gradient(135deg, #3b82f6, #1d4ed8);
+  color: #fff;
+  padding: 2px 7px;
+  border-radius: 5px;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 1px;
+}
+.topbar-sep { width: 1px; height: 24px; background: rgba(255,255,255,0.12); }
+.topbar-project {
+  color: rgba(255,255,255,0.9);
+  font-size: 13px;
+  font-weight: 600;
+  flex: 1;
+}
+.topbar-project small { font-weight: 400; opacity: 0.4; margin-left: 8px; font-size: 11px; }
+
+.stage-pills {
+  display: flex;
+  gap: 2px;
+  background: rgba(0,0,0,0.25);
+  border-radius: 10px;
+  padding: 3px;
+}
+.stage-pill {
+  padding: 5px 14px;
+  border-radius: 8px;
+  font-size: 11px;
+  font-weight: 600;
+  color: rgba(255,255,255,0.35);
+  cursor: pointer;
+  transition: all 0.2s;
+  border: none;
+  background: none;
+  font-family: inherit;
+  white-space: nowrap;
+}
+.stage-pill:hover { color: rgba(255,255,255,0.7); }
+.stage-pill.active { background: rgba(255,255,255,0.14); color: #fff; }
+.stage-pill.done { color: rgba(255,255,255,0.5); }
+.stage-pill .num {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 17px; height: 17px;
+  border-radius: 50%;
+  background: rgba(255,255,255,0.1);
+  font-size: 10px;
+  margin-right: 5px;
+  font-weight: 700;
+}
+.stage-pill.active .num { background: rgba(255,255,255,0.25); }
+.stage-pill.done .num { background: #16a34a; color: #fff; }
+
+.topbar-actions { display: flex; gap: 6px; align-items: center; }
+.tb-btn {
+  padding: 5px 12px;
+  border-radius: 7px;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s;
+  border: 1px solid rgba(255,255,255,0.15);
+  background: rgba(255,255,255,0.06);
+  color: rgba(255,255,255,0.7);
+  font-family: inherit;
+}
+.tb-btn:hover { background: rgba(255,255,255,0.12); color: #fff; }
+.tb-btn.primary {
+  background: #fff;
+  color: var(--brand);
+  border-color: transparent;
+  font-weight: 700;
+}
+.tb-btn.primary:hover { background: #e6eeff; }
+
+/* ─── Main ─── */
+.main { flex: 1; display: flex; overflow: hidden; }
+
+/* ─── Canvas ─── */
+.canvas-wrap {
+  flex: 1;
+  position: relative;
+  overflow: hidden;
+  background: #1a2332;
+}
+#pdf-canvas {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform-origin: center center;
+  cursor: grab;
+}
+#pdf-canvas:active { cursor: grabbing; }
+
+/* Overlays container - same size/position as canvas */
+#overlays {
+  position: absolute;
+  top: 0; left: 0;
+  pointer-events: none;
+  transform-origin: center center;
+}
+
+/* Component overlay boxes */
+.comp-overlay {
+  position: absolute;
+  border: 2px solid transparent;
+  border-radius: 4px;
+  cursor: pointer;
+  pointer-events: auto;
+  transition: all 0.2s;
+  display: flex;
+  align-items: flex-start;
+  justify-content: flex-start;
+}
+.comp-overlay .comp-tag {
+  font-size: 9px;
+  font-weight: 700;
+  padding: 2px 6px;
+  border-radius: 3px;
+  white-space: nowrap;
+  opacity: 0;
+  transition: opacity 0.2s;
+  margin: 3px;
+  letter-spacing: 0.3px;
+  text-transform: uppercase;
+  pointer-events: none;
+}
+.comp-overlay:hover {
+  border-color: var(--comp-color);
+  background: color-mix(in srgb, var(--comp-color) 8%, transparent);
+}
+.comp-overlay:hover .comp-tag {
+  opacity: 1;
+  background: var(--comp-color);
+  color: #fff;
+}
+.comp-overlay.selected {
+  border-color: var(--comp-color);
+  background: color-mix(in srgb, var(--comp-color) 12%, transparent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--comp-color) 25%, transparent);
+}
+.comp-overlay.selected .comp-tag {
+  opacity: 1;
+  background: var(--comp-color);
+  color: #fff;
+}
+
+/* Show all overlays mode */
+.show-all .comp-overlay {
+  border-color: color-mix(in srgb, var(--comp-color) 50%, transparent);
+  background: color-mix(in srgb, var(--comp-color) 5%, transparent);
+}
+.show-all .comp-overlay .comp-tag {
+  opacity: 0.8;
+  background: var(--comp-color);
+  color: #fff;
+}
+
+/* Canvas floating controls */
+.canvas-controls {
+  position: absolute;
+  top: 12px;
+  left: 12px;
+  display: flex;
+  gap: 4px;
+  z-index: 10;
+}
+.cv-btn {
+  width: 34px; height: 34px;
+  border-radius: 9px;
+  background: rgba(20,30,50,0.85);
+  border: 1px solid rgba(255,255,255,0.1);
+  color: rgba(255,255,255,0.6);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  font-size: 15px;
+  transition: all 0.15s;
+  backdrop-filter: blur(8px);
+}
+.cv-btn:hover { background: rgba(30,50,80,0.9); color: #fff; border-color: rgba(255,255,255,0.2); }
+.cv-btn.active { background: var(--brand); color: #fff; border-color: var(--brand); }
+
+.canvas-modes {
+  position: absolute;
+  top: 12px;
+  right: 360px;
+  display: flex;
+  gap: 4px;
+  z-index: 10;
+}
+.mode-btn {
+  padding: 6px 11px;
+  border-radius: 9px;
+  background: rgba(20,30,50,0.85);
+  border: 1px solid rgba(255,255,255,0.1);
+  color: rgba(255,255,255,0.5);
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  font-family: inherit;
+  transition: all 0.15s;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  backdrop-filter: blur(8px);
+}
+.mode-btn:hover { color: rgba(255,255,255,0.8); border-color: rgba(255,255,255,0.2); }
+.mode-btn.active { background: rgba(0,46,129,0.7); color: #fff; border-color: var(--brand-light); }
+.mode-dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; opacity: 0.4; }
+.mode-btn.active .mode-dot { opacity: 1; }
+
+/* Sheet tabs (bottom of canvas) */
+.sheet-tabs {
+  position: absolute;
+  bottom: 12px;
+  left: 12px;
+  display: flex;
+  gap: 3px;
+  z-index: 10;
+}
+.sheet-tab {
+  padding: 5px 12px;
+  border-radius: 7px;
+  background: rgba(20,30,50,0.85);
+  border: 1px solid rgba(255,255,255,0.1);
+  color: rgba(255,255,255,0.4);
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  font-family: inherit;
+  transition: all 0.15s;
+  backdrop-filter: blur(8px);
+}
+.sheet-tab:hover { color: rgba(255,255,255,0.7); }
+.sheet-tab.active { background: rgba(0,46,129,0.6); color: #fff; border-color: var(--brand-light); }
+
+/* Zoom indicator */
+.zoom-indicator {
+  position: absolute;
+  bottom: 12px;
+  right: 360px;
+  padding: 5px 10px;
+  border-radius: 7px;
+  background: rgba(20,30,50,0.85);
+  border: 1px solid rgba(255,255,255,0.08);
+  color: rgba(255,255,255,0.4);
+  font-size: 11px;
+  font-weight: 600;
+  backdrop-filter: blur(8px);
+  z-index: 10;
+}
+
+/* Loading overlay */
+.loading-overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  background: #1a2332;
+  z-index: 50;
+  transition: opacity 0.4s;
+}
+.loading-overlay.hidden { opacity: 0; pointer-events: none; }
+.loading-spinner {
+  width: 40px; height: 40px;
+  border: 3px solid rgba(255,255,255,0.1);
+  border-top-color: var(--brand-light);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+.loading-text { color: rgba(255,255,255,0.4); font-size: 13px; font-weight: 500; }
+
+/* ─── Sidebar ─── */
+.sidebar {
+  width: 340px;
+  flex-shrink: 0;
+  background: #fff;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  z-index: 20;
+  box-shadow: -4px 0 30px rgba(0,0,0,0.15);
+}
+.sb-header {
+  padding: 14px 18px;
+  border-bottom: 1px solid rgba(0,60,160,0.08);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  background: #fafbfd;
+}
+.sb-title {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--brand-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.8px;
+}
+.sb-close {
+  width: 26px; height: 26px;
+  border-radius: 7px;
+  border: none;
+  background: none;
+  cursor: pointer;
+  color: var(--brand-muted);
+  font-size: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.sb-close:hover { background: var(--brand-pale); color: var(--brand); }
+
+.sb-body { flex: 1; overflow-y: auto; }
+
+/* Component header */
+.comp-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 16px 18px 12px;
+}
+.comp-badge {
+  width: 40px; height: 40px;
+  border-radius: 11px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 18px;
+  flex-shrink: 0;
+}
+.comp-head h3 { font-size: 15px; font-weight: 700; color: var(--brand-dark); }
+.comp-head p { font-size: 11px; color: var(--brand-muted); margin-top: 1px; }
+
+/* Sections */
+.sb-sec {
+  padding: 14px 18px;
+  border-bottom: 1px solid rgba(0,60,160,0.05);
+}
+.sb-sec-title {
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--brand-muted);
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  margin-bottom: 8px;
+}
+
+/* Dimension row */
+.dim-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 0;
+}
+.dim-row + .dim-row { border-top: 1px solid rgba(0,60,160,0.04); }
+.dim-lbl { font-size: 12px; color: #666; width: 55px; flex-shrink: 0; font-weight: 500; }
+.dim-inp {
+  flex: 1;
+  padding: 6px 8px;
+  border-radius: 7px;
+  border: 1.5px solid rgba(0,60,160,0.12);
+  font-family: 'Overpass';
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--brand-dark);
+  text-align: center;
+  transition: all 0.15s;
+  background: #fff;
+}
+.dim-inp:focus { outline: none; border-color: var(--brand-light); box-shadow: 0 0 0 3px rgba(0,46,129,0.1); }
+.dim-inp.changed { background: var(--brand-pale); border-color: var(--brand-light); }
+
+.quick-row { display: flex; gap: 3px; margin-top: 5px; flex-wrap: wrap; }
+.qbtn {
+  padding: 3px 8px;
+  border-radius: 5px;
+  border: 1px solid rgba(0,60,160,0.1);
+  background: #fff;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--brand-mid);
+  cursor: pointer;
+  font-family: inherit;
+  transition: all 0.12s;
+}
+.qbtn:hover { background: var(--brand-pale); color: var(--brand); border-color: var(--brand-light); }
+.qbtn.neg { color: #dc2626; border-color: rgba(220,38,38,0.15); }
+.qbtn.neg:hover { background: #fef2f2; border-color: #dc2626; }
+
+/* Cascade */
+.cascade {
+  background: var(--brand-mist);
+  border: 1px solid rgba(0,60,160,0.08);
+  border-radius: 10px;
+  padding: 10px 12px;
+}
+.cascade-hd {
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--brand);
+  margin-bottom: 6px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+.cascade-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: #555;
+  padding: 3px 0;
+}
+.cascade-row .arr { color: var(--brand-light); }
+.cascade-row .delta { margin-left: auto; font-weight: 700; color: var(--brand); font-size: 10px; }
+
+/* Constraints */
+.cst-row {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 12px;
+  padding: 4px 0;
+}
+.cst-icon {
+  width: 17px; height: 17px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 9px;
+  flex-shrink: 0;
+  font-weight: 700;
+}
+.cst-icon.ok { background: #dcfce7; color: #16a34a; }
+.cst-icon.warn { background: #fef9c3; color: #ca8a04; }
+.cst-lbl { color: #666; flex: 1; }
+.cst-val { font-weight: 600; color: #333; font-size: 11px; }
+
+/* Apply bar */
+.apply-bar {
+  padding: 14px 18px;
+  border-top: 1px solid rgba(0,60,160,0.08);
+  display: flex;
+  gap: 6px;
+}
+.apply-btn {
+  flex: 1;
+  padding: 9px;
+  border-radius: 9px;
+  border: none;
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.apply-btn.go {
+  background: linear-gradient(135deg, #1a5cb8 0%, #002e81 100%);
+  color: #fff;
+  box-shadow: 0 2px 8px rgba(0,46,129,0.3);
+}
+.apply-btn.go:hover { box-shadow: 0 4px 16px rgba(0,46,129,0.4); transform: translateY(-1px); }
+.apply-btn.rst {
+  background: #fff;
+  color: var(--brand);
+  border: 1.5px solid rgba(0,60,160,0.15);
+}
+
+/* Component list */
+.comp-li {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 18px;
+  cursor: pointer;
+  transition: background 0.12s;
+  border-bottom: 1px solid rgba(0,60,160,0.03);
+}
+.comp-li:hover { background: var(--brand-mist); }
+.comp-li.active { background: var(--brand-pale); }
+.comp-li-dot { width: 8px; height: 8px; border-radius: 2px; flex-shrink: 0; }
+.comp-li-name { font-size: 12px; font-weight: 600; color: var(--brand-dark); flex: 1; }
+.comp-li-dim { font-size: 10px; color: var(--brand-muted); font-weight: 500; }
+
+/* ─── NL Bar ─── */
+.nl-bar {
+  height: 48px;
+  background: #fff;
+  border-top: 1px solid rgba(0,60,160,0.06);
+  display: flex;
+  align-items: center;
+  padding: 0 14px;
+  gap: 10px;
+  flex-shrink: 0;
+}
+.nl-icon {
+  width: 30px; height: 30px;
+  border-radius: 8px;
+  background: linear-gradient(135deg, #1a5cb8, #002e81);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #fff;
+  font-size: 13px;
+  flex-shrink: 0;
+}
+.nl-input {
+  flex: 1;
+  border: none;
+  outline: none;
+  font-family: 'Overpass';
+  font-size: 13px;
+  color: #333;
+}
+.nl-input::placeholder { color: #bbb; }
+.nl-hint { font-size: 10px; color: #ccc; white-space: nowrap; }
+.nl-send {
+  width: 30px; height: 30px;
+  border-radius: 7px;
+  border: none;
+  background: var(--brand);
+  color: #fff;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 14px;
+  transition: all 0.15s;
+}
+.nl-send:hover { background: var(--brand-deep); }
+
+/* ─── Toast ─── */
+.toast {
+  position: fixed;
+  bottom: 64px;
+  left: 50%;
+  transform: translateX(-50%) translateY(16px);
+  padding: 8px 18px;
+  border-radius: 10px;
+  background: rgba(10,20,40,0.92);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 600;
+  box-shadow: var(--shadow-lg);
+  opacity: 0;
+  transition: all 0.3s;
+  pointer-events: none;
+  z-index: 200;
+  white-space: nowrap;
+  backdrop-filter: blur(8px);
+}
+.toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+
+/* ─── Scrollbar ─── */
+.sb-body::-webkit-scrollbar { width: 4px; }
+.sb-body::-webkit-scrollbar-track { background: transparent; }
+.sb-body::-webkit-scrollbar-thumb { background: rgba(0,60,160,0.1); border-radius: 4px; }
+
+@keyframes fadeUp { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
+.anim { animation: fadeUp 0.25s ease both; }
+</style>
+</head>
+<body>
+
+<!-- Top Bar -->
+<div class="topbar">
+  <div class="topbar-logo">
+    ENERGYLINK <span class="flex-mark">FLEX</span>
+  </div>
+  <div class="topbar-sep"></div>
+  <div class="topbar-project">
+    Carter Machinery — Independence Power Station #1
+    <small>24189-CS1-0001 Rev 0</small>
+  </div>
+  <div class="stage-pills">
+    <button class="stage-pill done" onclick="setStage(this)"><span class="num">&#10003;</span>Import</button>
+    <button class="stage-pill active" onclick="setStage(this)"><span class="num">2</span>Configure</button>
+    <button class="stage-pill" onclick="setStage(this)"><span class="num">3</span>Review</button>
+    <button class="stage-pill" onclick="setStage(this)"><span class="num">4</span>Export</button>
+  </div>
+  <div class="topbar-actions">
+    <button class="tb-btn" onclick="toast('Undo: last change reverted')">&#8630; Undo</button>
+    <button class="tb-btn primary">Export DXF</button>
+  </div>
+</div>
+
+<!-- Main -->
+<div class="main">
+  <!-- Canvas -->
+  <div class="canvas-wrap" id="canvas-wrap">
+    <div class="loading-overlay" id="loading">
+      <div class="loading-spinner"></div>
+      <div class="loading-text">Rendering GA drawing...</div>
+    </div>
+
+    <canvas id="pdf-canvas"></canvas>
+    <div id="overlays"></div>
+
+    <!-- Controls -->
+    <div class="canvas-controls">
+      <button class="cv-btn" title="Zoom in" onclick="zoomIn()">+</button>
+      <button class="cv-btn" title="Zoom out" onclick="zoomOut()">&minus;</button>
+      <button class="cv-btn" title="Fit" onclick="zoomFit()">&#8690;</button>
+    </div>
+
+    <div class="canvas-modes">
+      <button class="mode-btn" id="btn-bbox" onclick="toggleBbox()">
+        <span class="mode-dot"></span>Components
+      </button>
+      <button class="mode-btn" id="btn-diff" onclick="toggleDiff()">
+        <span class="mode-dot"></span>Show Diff
+      </button>
+    </div>
+
+    <div class="sheet-tabs">
+      <button class="sheet-tab" onclick="loadSheet(1)">Sheet 1 — Notes</button>
+      <button class="sheet-tab active" onclick="loadSheet(2)">Sheet 2 — Elevation</button>
+      <button class="sheet-tab" onclick="loadSheet(3)">Sheet 3 — Section</button>
+    </div>
+
+    <div class="zoom-indicator" id="zoom-ind">100%</div>
+  </div>
+
+  <!-- Sidebar -->
+  <div class="sidebar" id="sidebar">
+    <div class="sb-header">
+      <span class="sb-title" id="sb-title">Components — 7 Detected</span>
+      <button class="sb-close" onclick="deselect()">&#10005;</button>
+    </div>
+    <div class="sb-body" id="sb-body"></div>
+  </div>
+</div>
+
+<!-- NL Bar -->
+<div class="nl-bar">
+  <div class="nl-icon">&#9889;</div>
+  <input class="nl-input" id="nl-input" type="text"
+         placeholder='Try: "make the SCR module 2 feet taller" or "extend the stack"'
+         onkeydown="if(event.key==='Enter')handleNL()">
+  <span class="nl-hint">Enter to send</span>
+  <button class="nl-send" onclick="handleNL()">&#10148;</button>
+</div>
+
+<div class="toast" id="toast-el"></div>
+
+<script>
+/* ═══════════════════════════════════════════
+   Component definitions mapped to Sheet 2
+   Positions are % of the drawing area
+   ═══════════════════════════════════════════ */
+const COMPS = {
+  'stack': {
+    name: 'Upper Stack',
+    type: 'Exhaust Stack — ASTM A36 Carbon Steel',
+    color: '#ef4444',
+    icon: '&#9650;',
+    // % of PDF page: [left, top, width, height]
+    box: [3.5, 5, 9, 53],
+    dims: { height: "15'-0 1/8\"", diameter: "9'-0\" (inside liner)" },
+    mainDim: "height",
+    mainVal: "15'-0 1/8\"",
+    constraints: [
+      { label: 'EPA stack height', value: '> 35 ft AGL', ok: true },
+      { label: 'Wind load (10 mph)', value: 'OK', ok: true },
+    ],
+    downstream: [],
+    upstream: ['silencer'],
+    notes: 'AES fiber insulation (4" thick, 8 PCF). SS liner sheets (409 SS, 14 GA). Four (4) 4" CEMS ports. Four (4) 6" EPA ports.',
+  },
+  'silencer': {
+    name: 'Silencer',
+    type: 'Acoustic Attenuator — ASTM A36 Carbon Steel',
+    color: '#ec4899',
+    icon: '&#9835;',
+    box: [8.5, 28, 10, 25],
+    dims: { height: "~9'-8 3/4\"", width: "~16'-0\"" },
+    mainDim: "height",
+    mainVal: "9'-8 3/4\"",
+    constraints: [
+      { label: 'Acoustic target', value: '< 85 dBA @ 3ft', ok: true },
+      { label: 'Pressure drop', value: '< 1.0" W.C.', ok: true },
+    ],
+    downstream: ['stack'],
+    upstream: ['scr-module'],
+    notes: 'AES fiber insulation (4" thick, 8 PCF). SS liner sheets (409 SS, 14 GA, stack). Liner sheets overlap in direction of rain fall.',
+  },
+  'scr-module': {
+    name: 'SCR Catalyst Module',
+    type: 'SCR Catalyst Housing — ASTM A36/A240',
+    color: '#16a34a',
+    icon: '&#9670;',
+    box: [16, 28, 28, 40],
+    dims: { height: "~25'-0\"", width: "~9'-8 3/4\" + 4'-0 3/8\"" },
+    mainDim: "height",
+    mainVal: "25'-0\"",
+    constraints: [
+      { label: 'SCR efficiency', value: '9.0-2.0 ppmvd @ 15% O2', ok: true },
+      { label: 'Catalyst clearance', value: '12" min', ok: true },
+      { label: 'NH3 grid spacing', value: 'OK', ok: true },
+    ],
+    downstream: ['silencer', 'stack'],
+    upstream: ['dist-grid'],
+    notes: 'Full frame belt w/ integrated liner. High temp material w/ wire-reinforced backing & pillow flange. Inlet 304 SS, outlet A240 409 SS.',
+  },
+  'dist-grid': {
+    name: 'Distribution Grid',
+    type: 'Flow Distribution — SS 304',
+    color: '#8b5cf6',
+    icon: '&#9783;',
+    box: [38, 30, 8, 33],
+    dims: { height: "~11'-0 1/8\"", width: "matching module" },
+    mainDim: "height",
+    mainVal: "11'-0 1/8\"",
+    constraints: [
+      { label: 'Flow uniformity', value: '< 15% CV', ok: true },
+    ],
+    downstream: ['scr-module', 'silencer', 'stack'],
+    upstream: ['transition-duct'],
+    notes: 'Ensures uniform flow distribution across catalyst bed face. Referenced as "DIST. GRID" on drawing.',
+  },
+  'transition-duct': {
+    name: 'Transition / Reactor Duct',
+    type: 'Connecting Ductwork — ASTM A36',
+    color: '#f59e0b',
+    icon: '&#9552;',
+    box: [44, 38, 16, 28],
+    dims: { length: "~10'-2 3/4\"", height: "~5'-11 7/8\"" },
+    mainDim: "length",
+    mainVal: "10'-2 3/4\"",
+    constraints: [
+      { label: 'Mixing length', value: '> 3x hydraulic dia', ok: true },
+      { label: 'Pressure drop', value: '< 0.5" W.C.', ok: true },
+    ],
+    downstream: ['dist-grid', 'scr-module', 'silencer', 'stack'],
+    upstream: ['turbine-outlet'],
+    notes: 'ASTM A36 carbon steel casing. AES fiber insulation (4" thick, 8 PCF). SS liner sheets (409 SS, 12 GA floor, 14 GA walls/roof/stack).',
+  },
+  'inlet-exp': {
+    name: 'Inlet Expansion Joint',
+    type: 'Hot-to-Cold Expansion Joint (N12)',
+    color: '#06b6d4',
+    icon: '&#8660;',
+    box: [42, 48, 5, 15],
+    dims: { gap: "4'-0 1/8\"" },
+    mainDim: "gap",
+    mainVal: "4'-0 1/8\"",
+    constraints: [
+      { label: 'Thermal growth', value: 'Accommodated', ok: true },
+    ],
+    downstream: ['transition-duct'],
+    upstream: ['turbine-outlet'],
+    notes: 'Hot-to-cold expansion. Referenced as N12 on nozzle schedule.',
+  },
+  'turbine-outlet': {
+    name: 'Turbine Outlet Connection',
+    type: 'Gas Turbine Exhaust Interface',
+    color: '#0ea5e9',
+    icon: '&#9788;',
+    box: [58, 32, 16, 33],
+    dims: { height: "14'-1 7/16\"", width: "6'-3 1/2\"" },
+    mainDim: "height",
+    mainVal: "14'-1 7/16\"",
+    constraints: [
+      { label: 'Exhaust temp (T130)', value: '941°F normal', ok: true },
+      { label: 'Flow rate', value: '465.2 kPPH', ok: true },
+    ],
+    downstream: ['inlet-exp', 'transition-duct'],
+    upstream: [],
+    notes: 'Gas turbine exhaust outlet. Mass flow: 465.2 kPPH @ 600°F. Normal avg exhaust temp: 941°F.',
+  },
+};
+
+let selected = null;
+let pdfDoc = null;
+let currentPage = 2;
+let scale = 1;
+let panX = 0, panY = 0;
+let canvasW = 0, canvasH = 0;
+
+/* ─── PDF Rendering ─── */
+const PDF_PATH = '../Drawings/24189-CS1-0001_0.pdf';
+
+pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+
+async function initPDF() {
+  try {
+    pdfDoc = await pdfjsLib.getDocument(PDF_PATH).promise;
+    await renderPage(currentPage);
+  } catch (err) {
+    document.getElementById('loading').innerHTML = `
+      <div style="color:rgba(255,255,255,0.5);text-align:center;max-width:400px">
+        <div style="font-size:40px;margin-bottom:16px">&#128196;</div>
+        <div style="font-size:14px;font-weight:600;margin-bottom:8px">Could not load PDF</div>
+        <div style="font-size:12px;opacity:0.6;line-height:1.6">
+          Place <code style="background:rgba(255,255,255,0.1);padding:2px 6px;border-radius:4px">24189-CS1-0001_0.pdf</code>
+          in the <code style="background:rgba(255,255,255,0.1);padding:2px 6px;border-radius:4px">Drawings</code> folder
+          one level up from this file.<br><br>
+          Or run a local server: <code style="background:rgba(255,255,255,0.1);padding:2px 6px;border-radius:4px">npx serve .</code>
+        </div>
+      </div>`;
+  }
+}
+
+async function renderPage(num) {
+  const page = await pdfDoc.getPage(num);
+  const viewport = page.getViewport({ scale: 2 }); // 2x for crisp rendering
+
+  const canvas = document.getElementById('pdf-canvas');
+  const ctx = canvas.getContext('2d');
+  canvas.width = viewport.width;
+  canvas.height = viewport.height;
+  canvasW = viewport.width;
+  canvasH = viewport.height;
+
+  await page.render({ canvasContext: ctx, viewport }).promise;
+
+  document.getElementById('loading').classList.add('hidden');
+  zoomFit();
+  buildOverlays();
+}
+
+/* ─── Pan & Zoom ─── */
+function updateTransform() {
+  const canvas = document.getElementById('pdf-canvas');
+  const overlays = document.getElementById('overlays');
+  const t = `translate(${panX}px, ${panY}px) translate(-50%, -50%) scale(${scale})`;
+  canvas.style.transform = t;
+  overlays.style.transform = t;
+  overlays.style.width = canvasW + 'px';
+  overlays.style.height = canvasH + 'px';
+  overlays.style.top = '50%';
+  overlays.style.left = '50%';
+  document.getElementById('zoom-ind').textContent = Math.round(scale * 50) + '%';
+}
+
+function zoomFit() {
+  const wrap = document.getElementById('canvas-wrap');
+  const ww = wrap.clientWidth;
+  const wh = wrap.clientHeight;
+  const sx = (ww - 40) / canvasW;
+  const sy = (wh - 40) / canvasH;
+  scale = Math.min(sx, sy);
+  panX = 0;
+  panY = 0;
+  updateTransform();
+}
+
+function zoomIn() { scale *= 1.25; updateTransform(); }
+function zoomOut() { scale *= 0.8; updateTransform(); }
+
+// Mouse wheel zoom
+document.getElementById('canvas-wrap').addEventListener('wheel', (e) => {
+  e.preventDefault();
+  const factor = e.deltaY < 0 ? 1.08 : 0.92;
+  scale *= factor;
+  scale = Math.max(0.1, Math.min(5, scale));
+  updateTransform();
+}, { passive: false });
+
+// Pan with drag
+let dragging = false, dragStartX, dragStartY;
+document.getElementById('canvas-wrap').addEventListener('mousedown', (e) => {
+  if (e.target.closest('.comp-overlay') || e.target.closest('.cv-btn') ||
+      e.target.closest('.mode-btn') || e.target.closest('.sheet-tab')) return;
+  dragging = true;
+  dragStartX = e.clientX - panX;
+  dragStartY = e.clientY - panY;
+});
+window.addEventListener('mousemove', (e) => {
+  if (!dragging) return;
+  panX = e.clientX - dragStartX;
+  panY = e.clientY - dragStartY;
+  updateTransform();
+});
+window.addEventListener('mouseup', () => { dragging = false; });
+
+/* ─── Build Overlays ─── */
+function buildOverlays() {
+  const container = document.getElementById('overlays');
+  container.innerHTML = '';
+  for (const [id, comp] of Object.entries(COMPS)) {
+    const div = document.createElement('div');
+    div.className = 'comp-overlay';
+    div.style.cssText = `
+      --comp-color: ${comp.color};
+      left: ${comp.box[0]}%;
+      top: ${comp.box[1]}%;
+      width: ${comp.box[2]}%;
+      height: ${comp.box[3]}%;
+    `;
+    div.dataset.comp = id;
+    div.innerHTML = `<span class="comp-tag">${comp.name}</span>`;
+    div.addEventListener('click', (e) => { e.stopPropagation(); selectComp(id); });
+    container.appendChild(div);
+  }
+}
+
+/* ─── Select Component ─── */
+function selectComp(id) {
+  document.querySelectorAll('.comp-overlay.selected').forEach(el => el.classList.remove('selected'));
+  document.querySelectorAll('.comp-li.active').forEach(el => el.classList.remove('active'));
+
+  selected = id;
+  const comp = COMPS[id];
+
+  const overlay = document.querySelector(`[data-comp="${id}"]`);
+  if (overlay) overlay.classList.add('selected');
+
+  document.getElementById('sb-title').textContent = comp.name;
+
+  const body = document.getElementById('sb-body');
+  body.innerHTML = `
+    <div class="comp-head anim">
+      <div class="comp-badge" style="background:${comp.color}12;color:${comp.color}">${comp.icon}</div>
+      <div>
+        <h3>${comp.name}</h3>
+        <p>${comp.type}</p>
+      </div>
+    </div>
+
+    <div class="sb-sec anim" style="animation-delay:40ms">
+      <div class="sb-sec-title">Dimensions</div>
+      ${Object.entries(comp.dims).map(([key, val]) => `
+        <div class="dim-row">
+          <span class="dim-lbl">${key.charAt(0).toUpperCase() + key.slice(1)}</span>
+          <input class="dim-inp" type="text" value="${val}"
+                 onfocus="this.select()"
+                 onchange="onDimEdit('${id}','${key}',this)">
+        </div>
+      `).join('')}
+      <div class="quick-row">
+        <button class="qbtn" onclick="quickAdj('${id}',2)">+2'</button>
+        <button class="qbtn" onclick="quickAdj('${id}',1)">+1'</button>
+        <button class="qbtn" onclick="quickAdj('${id}',0.5)">+6"</button>
+        <button class="qbtn neg" onclick="quickAdj('${id}',-1)">&#8722;1'</button>
+        <button class="qbtn neg" onclick="quickAdj('${id}',-2)">&#8722;2'</button>
+      </div>
+    </div>
+
+    ${comp.downstream.length ? `
+    <div class="sb-sec anim" style="animation-delay:80ms">
+      <div class="sb-sec-title">Cascade Effect</div>
+      <div class="cascade">
+        <div class="cascade-hd">&#8635; Downstream shift preview</div>
+        ${comp.downstream.slice(0,4).map(dId => {
+          const d = COMPS[dId];
+          if (!d) return '';
+          return `<div class="cascade-row">
+            <span class="arr">&#8593;</span>
+            <span>${d.name}</span>
+            <span class="delta">shifts with change</span>
+          </div>`;
+        }).join('')}
+      </div>
+    </div>` : ''}
+
+    <div class="sb-sec anim" style="animation-delay:120ms">
+      <div class="sb-sec-title">Constraints</div>
+      ${comp.constraints.map(c => `
+        <div class="cst-row">
+          <div class="cst-icon ${c.ok ? 'ok' : 'warn'}">${c.ok ? '&#10003;' : '!'}</div>
+          <span class="cst-lbl">${c.label}</span>
+          <span class="cst-val">${c.value}</span>
+        </div>
+      `).join('')}
+    </div>
+
+    <div class="sb-sec anim" style="animation-delay:160ms">
+      <div class="sb-sec-title">Construction Notes</div>
+      <p style="font-size:11px;color:#666;line-height:1.5">${comp.notes}</p>
+    </div>
+  `;
+}
+
+function deselect() {
+  selected = null;
+  document.querySelectorAll('.comp-overlay.selected').forEach(el => el.classList.remove('selected'));
+  document.getElementById('sb-title').textContent = 'Components — 7 Detected';
+  showCompList();
+}
+
+function showCompList() {
+  const body = document.getElementById('sb-body');
+  body.innerHTML = Object.entries(COMPS).map(([id, c]) => `
+    <div class="comp-li" onclick="selectComp('${id}')">
+      <div class="comp-li-dot" style="background:${c.color}"></div>
+      <span class="comp-li-name">${c.name}</span>
+      <span class="comp-li-dim">${c.mainVal}</span>
+    </div>
+  `).join('');
+}
+
+/* ─── Quick adjust & edit ─── */
+function parseFtIn(s) {
+  const m = s.match(/(\d+)'[- ]?(\d+)?/);
+  if (!m) return 0;
+  return parseInt(m[1]) * 12 + (parseInt(m[2]) || 0);
+}
+function toFtIn(inches) {
+  const ft = Math.floor(inches / 12);
+  const inn = inches % 12;
+  return inn === 0 ? `${ft}'-0"` : `${ft}'-${inn}"`;
+}
+
+function quickAdj(id, deltaFt) {
+  const comp = COMPS[id];
+  const key = comp.mainDim;
+  const current = comp.dims[key];
+  const inches = parseFtIn(current);
+  if (!inches) { toast('Cannot parse dimension — edit manually'); return; }
+  const newInches = Math.max(12, inches + deltaFt * 12);
+  comp.dims[key] = toFtIn(newInches);
+  comp.mainVal = comp.dims[key];
+  selectComp(id);
+  toast(`${comp.name} ${key}: ${current} → ${comp.dims[key]}`);
+}
+
+function onDimEdit(id, key, input) {
+  const comp = COMPS[id];
+  comp.dims[key] = input.value;
+  if (key === comp.mainDim) comp.mainVal = input.value;
+  input.classList.add('changed');
+  toast(`${comp.name} ${key} updated`);
+}
+
+/* ─── Toggles ─── */
+function toggleBbox() {
+  document.getElementById('overlays').classList.toggle('show-all');
+  document.getElementById('btn-bbox').classList.toggle('active');
+}
+function toggleDiff() {
+  document.getElementById('btn-diff').classList.toggle('active');
+  toast('Diff overlay — available after applying changes');
+}
+
+/* ─── Sheet tabs ─── */
+async function loadSheet(num) {
+  if (!pdfDoc) return;
+  currentPage = num;
+  document.querySelectorAll('.sheet-tab').forEach((t, i) => {
+    t.classList.toggle('active', i + 1 === num);
+  });
+  document.getElementById('loading').classList.remove('hidden');
+  await renderPage(num);
+}
+
+/* ─── NL Bar ─── */
+function handleNL() {
+  const input = document.getElementById('nl-input');
+  const text = input.value.trim().toLowerCase();
+  if (!text) return;
+
+  if (text.includes('scr') && (text.includes('tall') || text.includes('height') || text.includes('extend'))) {
+    const m = text.match(/(\d+)\s*(foot|feet|ft|')/);
+    if (m) { quickAdj('scr-module', parseInt(m[1])); selectComp('scr-module'); }
+    else { selectComp('scr-module'); toast('Selected SCR Module — adjust in sidebar'); }
+  } else if (text.includes('stack')) {
+    selectComp('stack');
+    const m = text.match(/(\d+)\s*(foot|feet|ft|')/);
+    if (m) quickAdj('stack', parseInt(m[1]));
+    else toast('Selected Stack');
+  } else if (text.includes('silencer')) {
+    selectComp('silencer');
+    toast('Selected Silencer');
+  } else if (text.includes('duct') || text.includes('transition')) {
+    selectComp('transition-duct');
+    toast('Selected Transition Duct');
+  } else {
+    toast('Try: "make the SCR module 2 feet taller"');
+  }
+  input.value = '';
+}
+
+/* ─── Stage pills ─── */
+function setStage(el) {
+  document.querySelectorAll('.stage-pill').forEach(p => p.classList.remove('active'));
+  el.classList.add('active');
+  toast('Stage: ' + el.textContent.trim());
+}
+
+/* ─── Toast ─── */
+function toast(msg) {
+  const el = document.getElementById('toast-el');
+  el.textContent = msg;
+  el.classList.add('show');
+  clearTimeout(el._t);
+  el._t = setTimeout(() => el.classList.remove('show'), 2800);
+}
+
+/* ─── Init ─── */
+showCompList();
+initPDF();
+</script>
+</body>
+</html>

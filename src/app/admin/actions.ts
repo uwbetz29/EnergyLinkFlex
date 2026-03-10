@@ -96,13 +96,6 @@ export async function updateUserRole(userId: string, newRole: string) {
     .eq("id", userId);
 
   if (error) throw new Error(error.message);
-
-  await admin.from("admin_audit_log").insert({
-    actor_id: user.id,
-    action: "update_role",
-    target_id: userId,
-    details: { new_role: newRole },
-  });
 }
 
 export async function createUser(
@@ -111,7 +104,7 @@ export async function createUser(
   displayName: string,
   role: string
 ) {
-  const { user, profile } = await requireAdmin();
+  const { profile } = await requireAdmin();
 
   if (role === "super_admin" && profile.system_role !== "super_admin") {
     throw new Error("Only super admins can create super admins");
@@ -135,18 +128,11 @@ export async function createUser(
     system_role: role,
   });
 
-  await admin.from("admin_audit_log").insert({
-    actor_id: user.id,
-    action: "create_user",
-    target_id: newUser.user.id,
-    details: { email, role },
-  });
-
   return newUser.user.id;
 }
 
 export async function deleteUser(userId: string) {
-  const { user, profile } = await requireAdmin();
+  const { user } = await requireAdmin();
 
   if (userId === user.id) {
     throw new Error("Cannot delete yourself");
@@ -166,11 +152,4 @@ export async function deleteUser(userId: string) {
 
   const { error } = await admin.auth.admin.deleteUser(userId);
   if (error) throw new Error(error.message);
-
-  await admin.from("admin_audit_log").insert({
-    actor_id: user.id,
-    action: "delete_user",
-    target_id: userId,
-    details: {},
-  });
 }

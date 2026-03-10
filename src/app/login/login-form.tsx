@@ -3,9 +3,8 @@
 import { useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import Image from "next/image";
+import Link from "next/link";
 
 export function LoginForm() {
   const router = useRouter();
@@ -51,33 +50,39 @@ export function LoginForm() {
   };
 
   return (
-    <div className="min-h-screen bg-[#F5F5F5] flex flex-col items-center justify-center px-4">
+    <div className="brand-bg min-h-screen flex flex-col items-center justify-center px-4">
       <div className="w-full max-w-[400px]">
         {/* Logo */}
-        <div className="flex justify-center mb-8">
+        <div className="flex justify-center mb-6 animate-rise animate-rise-1">
           <Image
             src="/logo.png"
             alt="EnergyLink FLEX"
-            width={706}
-            height={149}
-            className="w-[300px] h-auto"
+            width={418}
+            height={156}
+            className="w-[clamp(180px,40vw,280px)] h-auto"
             priority
           />
         </div>
 
-        {/* Card */}
-        <div className="bg-white rounded-2xl border border-[#D4D4D4] p-8 shadow-sm">
-          <h2 className="text-lg font-semibold text-[#0C121D] text-center mb-6">
-            Sign in to your account
-          </h2>
+        {/* Subtitle */}
+        <p className="text-center text-[#6b8ab8] text-sm font-semibold mb-6 animate-rise animate-rise-2">
+          Sign in and let&apos;s get to work!
+        </p>
 
+        {/* Glass card */}
+        <div className="glass-card rounded-[24px] p-8 animate-rise animate-rise-3">
           {/* Google OAuth */}
-          <Button
+          <button
             onClick={handleGoogleLogin}
-            variant="outline"
-            className="w-full h-11 mb-4 border-[#D4D4D4] hover:bg-[#F0F0F0] font-medium"
+            type="button"
+            className="w-full h-11 flex items-center justify-center gap-2
+                       bg-white rounded-full border-[1.5px] border-[rgba(0,60,160,0.15)]
+                       text-sm font-semibold text-[#001a4d]
+                       hover:-translate-y-[1px] hover:shadow-md
+                       active:translate-y-0
+                       transition-all duration-150 cursor-pointer mb-5"
           >
-            <svg className="w-5 h-5 mr-2" viewBox="0 0 24 24">
+            <svg className="w-5 h-5" viewBox="0 0 24 24">
               <path
                 d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92a5.06 5.06 0 01-2.2 3.32v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.1z"
                 fill="#4285F4"
@@ -96,15 +101,15 @@ export function LoginForm() {
               />
             </svg>
             Continue with Google
-          </Button>
+          </button>
 
           {/* Divider */}
-          <div className="relative my-4">
+          <div className="relative my-5">
             <div className="absolute inset-0 flex items-center">
-              <div className="w-full border-t border-[#D4D4D4]" />
+              <div className="w-full border-t border-[rgba(0,60,160,0.12)]" />
             </div>
             <div className="relative flex justify-center text-xs">
-              <span className="bg-white px-3 text-[#999]">
+              <span className="bg-white/80 px-3 text-[#a5b8d4]">
                 or sign in with email
               </span>
             </div>
@@ -112,51 +117,78 @@ export function LoginForm() {
 
           {/* Error */}
           {(error || urlError) && (
-            <div className="mb-4 p-3 rounded-lg bg-red-50 border border-red-200 text-sm text-red-600">
+            <div className={`mb-4 p-3 rounded-xl bg-red-50 border border-red-200 text-sm text-red-600 ${error ? "animate-shake" : ""}`}>
               {error || "Authentication failed. Please try again."}
             </div>
           )}
 
           {/* Email/Password Form */}
-          <form onSubmit={handleEmailSignIn} className="space-y-3">
+          <form onSubmit={handleEmailSignIn} className="space-y-4">
             <div>
-              <label className="text-sm font-medium text-[#666] mb-1 block">
+              <label className="text-xs font-semibold text-[#4a5b7a] mb-1.5 block">
                 Email
               </label>
-              <Input
+              <input
                 type="email"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
                 placeholder="you@example.com"
                 required
                 autoComplete="email"
+                className="w-full h-11 px-4 rounded-full text-sm
+                           bg-white/70 border-[1.5px] border-[rgba(0,60,160,0.15)]
+                           text-[#001a4d] placeholder-[#a5b8d4]
+                           focus:outline-none focus:border-[#1a5cb8] focus:ring-2 focus:ring-[rgba(0,46,129,0.15)]
+                           transition-all duration-150"
               />
             </div>
             <div>
-              <label className="text-sm font-medium text-[#666] mb-1 block">
-                Password
-              </label>
-              <Input
+              <div className="flex items-center justify-between mb-1.5">
+                <label className="text-xs font-semibold text-[#4a5b7a]">
+                  Password
+                </label>
+                <Link
+                  href="/auth/reset-password"
+                  className="text-[11px] font-semibold text-[#1a5cb8] hover:text-[#002e81] transition-colors"
+                >
+                  Forgot password?
+                </Link>
+              </div>
+              <input
                 type="password"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 placeholder="Your password"
                 required
                 autoComplete="current-password"
+                className="w-full h-11 px-4 rounded-full text-sm
+                           bg-white/70 border-[1.5px] border-[rgba(0,60,160,0.15)]
+                           text-[#001a4d] placeholder-[#a5b8d4]
+                           focus:outline-none focus:border-[#1a5cb8] focus:ring-2 focus:ring-[rgba(0,46,129,0.15)]
+                           transition-all duration-150"
               />
             </div>
-            <Button
+
+            {/* Sign In button */}
+            <button
               type="submit"
               disabled={loading}
-              className="w-full h-11 bg-[#93C90F] hover:bg-[#7AB00D] text-white font-medium mt-2"
+              className="w-full h-11 rounded-full text-sm font-bold text-white
+                         hover:-translate-y-[1px] active:translate-y-0
+                         disabled:opacity-60 disabled:cursor-not-allowed
+                         transition-all duration-150 cursor-pointer mt-2"
+              style={{
+                background: "linear-gradient(135deg, #1a5cb8 0%, #002e81 100%)",
+                boxShadow: "0 4px 16px rgba(0,46,129,0.3)",
+              }}
             >
               {loading ? "Signing in..." : "Sign In"}
-            </Button>
+            </button>
           </form>
         </div>
 
         {/* Footer */}
-        <div className="text-center mt-6 text-xs text-[#999]">
+        <div className="text-center mt-8 text-[11px] text-[#b5c4db] animate-rise animate-rise-5">
           EnergyLink International
         </div>
       </div>
