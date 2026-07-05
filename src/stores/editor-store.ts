@@ -1,4 +1,6 @@
 import { create } from "zustand";
+import type { DwgComponent, DwgLayer, DwgTitleBlock, DwgSheet } from "@/lib/dwg/types";
+import { parseDimInches, formatDimInches } from "@/lib/dwg/svg-stretch";
 
 /* ─── Types ─── */
 
@@ -12,6 +14,8 @@ export interface ComponentDef {
   box: [number, number, number, number];
   /** Editable dimensions keyed by label */
   dims: Record<string, string>;
+  /** Map dim key → SVG *D## block ID for stretch geometry lookup */
+  dimBlocks: Record<string, string>;
   /** Which dim key is the "main" one for quick-adjust */
   mainDim: string;
   constraints: { label: string; value: string; ok: boolean }[];
@@ -22,6 +26,14 @@ export interface ComponentDef {
 }
 
 export type Stage = "import" | "configure" | "review" | "export";
+export type DrawingType = "pdf" | "dwg";
+
+export interface SvgViewBox {
+  minX: number;
+  minY: number;
+  width: number;
+  height: number;
+}
 
 export interface EditorState {
   /* Project */
@@ -29,19 +41,45 @@ export interface EditorState {
   projectName: string | null;
 
   /* Drawing */
+  drawingType: DrawingType;
   pdfUrl: string | null;
+  svgUrl: string | null;
   currentSheet: number;
   totalSheets: number;
+
+  /* Multi-sheet DWG */
+  sheets: DwgSheet[];
+  activeSheetIndex: number;
+
+  /* DWG data */
+  dwgComponents: DwgComponent[];
+  dwgLayers: DwgLayer[];
+  dwgMetadata: DwgTitleBlock | null;
+  visibleLayers: Set<string>;
+
+  /* SVG viewBox for coordinate mapping */
+  svgViewBox: SvgViewBox | null;
 
   /* Components */
   components: Record<string, ComponentDef>;
   selectedId: string | null;
   showOverlays: boolean;
   showDiff: boolean;
+  /** Component IDs hidden from sidebar & overlays */
+  hiddenComponents: Set<string>;
 
   /* Changes tracking: componentId → { dimKey → originalValue } */
   originals: Record<string, Record<string, string>>;
   changeCount: number;
+
+  /** Incremented on every dim change to trigger SVG re-stretch */
+  stretchVersion: number;
+
+  /* Undo / Redo */
+  history: { compId: string; dimKey: string; prevValue: string; newValue: string }[];
+  historyIndex: number;
+  undo: () => void;
+  redo: () => void;
 
   /* Stage */
   stage: Stage;
@@ -53,9 +91,18 @@ export interface EditorState {
 
   /* Actions */
   setProject: (id: string, name: string) => void;
+  setDrawingType: (type: DrawingType) => void;
   setPdfUrl: (url: string) => void;
+  setSvgUrl: (url: string) => void;
   setSheet: (n: number) => void;
   setComponents: (comps: Record<string, ComponentDef>) => void;
+  setDwgData: (
+    components: DwgComponent[],
+    layers: DwgLayer[],
+    metadata: DwgTitleBlock | null
+  ) => void;
+  setSvgViewBox: (vb: SvgViewBox) => void;
+  toggleLayer: (layerName: string) => void;
   select: (id: string | null) => void;
   toggleOverlays: () => void;
   toggleDiff: () => void;
@@ -65,21 +112,20 @@ export interface EditorState {
   updateDim: (compId: string, dimKey: string, value: string) => void;
   quickAdjust: (compId: string, deltaFt: number) => void;
   resetComp: (compId: string) => void;
+  toggleComponentVisibility: (compId: string) => void;
+  showAllComponents: () => void;
+
+  /* Component management */
+  addComponent: (comp: ComponentDef) => void;
+  removeComponent: (id: string) => void;
+
+  /* Multi-sheet actions */
+  setSheets: (sheets: DwgSheet[]) => void;
+  setActiveSheet: (index: number) => void;
 }
 
 /* ─── Helpers ─── */
-
-function parseFtIn(s: string): number {
-  const m = s.match(/(\d+)'[- ]?(\d+)?/);
-  if (!m) return 0;
-  return parseInt(m[1]) * 12 + (parseInt(m[2]) || 0);
-}
-
-function toFtIn(inches: number): string {
-  const ft = Math.floor(inches / 12);
-  const inn = inches % 12;
-  return inn === 0 ? `${ft}'-0"` : `${ft}'-${inn}"`;
-}
+/* Dimension parsing now uses parseDimInches/formatDimInches from svg-stretch */
 
 /* ─── Store ─── */
 
@@ -87,17 +133,34 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   projectId: null,
   projectName: null,
 
+  drawingType: "pdf" as DrawingType,
   pdfUrl: null,
+  svgUrl: null,
   currentSheet: 2,
   totalSheets: 3,
+
+  sheets: [],
+  activeSheetIndex: 0,
+
+  dwgComponents: [],
+  dwgLayers: [],
+  dwgMetadata: null,
+  visibleLayers: new Set<string>(),
+
+  svgViewBox: null,
 
   components: {},
   selectedId: null,
   showOverlays: false,
   showDiff: false,
+  hiddenComponents: new Set<string>(),
 
   originals: {},
   changeCount: 0,
+  stretchVersion: 0,
+
+  history: [],
+  historyIndex: -1,
 
   stage: "configure",
 
@@ -105,10 +168,44 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   panX: 0,
   panY: 0,
 
+
   setProject: (id, name) => set({ projectId: id, projectName: name }),
+  setDrawingType: (type) => set({ drawingType: type }),
   setPdfUrl: (url) => set({ pdfUrl: url }),
+  setSvgUrl: (url) => set({ svgUrl: url }),
   setSheet: (n) => set({ currentSheet: n }),
   setComponents: (comps) => set({ components: comps }),
+  setDwgData: (components, layers, metadata) => {
+    // Auto-hide non-essential layers for cleaner sales view
+    const hiddenByDefault = new Set([
+      "Hatch (ANSI)",
+      "Hidden (ANSI)",
+      "Border",
+      "Border (ANSI)",
+    ]);
+    const visible = new Set(
+      layers
+        .filter((l) => !hiddenByDefault.has(l.name))
+        .map((l) => l.name)
+    );
+    set({
+      dwgComponents: components,
+      dwgLayers: layers,
+      dwgMetadata: metadata,
+      visibleLayers: visible,
+    });
+  },
+  setSvgViewBox: (vb) => set({ svgViewBox: vb }),
+  toggleLayer: (layerName) =>
+    set((s) => {
+      const next = new Set(s.visibleLayers);
+      if (next.has(layerName)) {
+        next.delete(layerName);
+      } else {
+        next.add(layerName);
+      }
+      return { visibleLayers: next };
+    }),
 
   select: (id) => set({ selectedId: id }),
   toggleOverlays: () => set((s) => ({ showOverlays: !s.showOverlays })),
@@ -121,6 +218,12 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     const { components, originals } = get();
     const comp = components[compId];
     if (!comp) return;
+
+    // Truncate redo history and add new entry
+    const prevValue = comp.dims[dimKey];
+    if (prevValue === value) return; // No change
+    const newHistory = get().history.slice(0, get().historyIndex + 1);
+    newHistory.push({ compId, dimKey, prevValue, newValue: value });
 
     // Save original if first edit
     const compOrig = originals[compId] ?? {};
@@ -145,7 +248,14 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       }
     }
 
-    set({ components: newComps, originals: newOrig, changeCount: count });
+    set({
+      components: newComps,
+      originals: newOrig,
+      changeCount: count,
+      stretchVersion: get().stretchVersion + 1,
+      history: newHistory,
+      historyIndex: newHistory.length - 1,
+    });
   },
 
   quickAdjust: (compId, deltaFt) => {
@@ -154,10 +264,82 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     if (!comp) return;
     const key = comp.mainDim;
     const current = comp.dims[key];
-    const inches = parseFtIn(current);
-    if (!inches) return;
+    const inches = parseDimInches(current);
+    if (inches === null || inches === 0) {
+      // Try as plain number (DWG scale units)
+      const num = parseFloat(current);
+      if (!isNaN(num)) {
+        const newVal = Math.max(1, num + deltaFt);
+        get().updateDim(compId, key, String(Math.round(newVal * 100) / 100));
+        return;
+      }
+      return;
+    }
     const newInches = Math.max(12, inches + deltaFt * 12);
-    get().updateDim(compId, key, toFtIn(newInches));
+    get().updateDim(compId, key, formatDimInches(newInches));
+  },
+
+  undo: () => {
+    const { history, historyIndex, components, originals } = get();
+    if (historyIndex < 0) return;
+
+    const entry = history[historyIndex];
+    const comp = components[entry.compId];
+    if (!comp) return;
+
+    const newComps = {
+      ...components,
+      [entry.compId]: {
+        ...comp,
+        dims: { ...comp.dims, [entry.dimKey]: entry.prevValue },
+      },
+    };
+
+    // Recount changes
+    let count = 0;
+    for (const cid of Object.keys(originals)) {
+      for (const dk of Object.keys(originals[cid])) {
+        if (newComps[cid]?.dims[dk] !== originals[cid][dk]) count++;
+      }
+    }
+
+    set({
+      components: newComps,
+      historyIndex: historyIndex - 1,
+      changeCount: count,
+      stretchVersion: get().stretchVersion + 1,
+    });
+  },
+
+  redo: () => {
+    const { history, historyIndex, components, originals } = get();
+    if (historyIndex >= history.length - 1) return;
+
+    const entry = history[historyIndex + 1];
+    const comp = components[entry.compId];
+    if (!comp) return;
+
+    const newComps = {
+      ...components,
+      [entry.compId]: {
+        ...comp,
+        dims: { ...comp.dims, [entry.dimKey]: entry.newValue },
+      },
+    };
+
+    let count = 0;
+    for (const cid of Object.keys(originals)) {
+      for (const dk of Object.keys(originals[cid])) {
+        if (newComps[cid]?.dims[dk] !== originals[cid][dk]) count++;
+      }
+    }
+
+    set({
+      components: newComps,
+      historyIndex: historyIndex + 1,
+      changeCount: count,
+      stretchVersion: get().stretchVersion + 1,
+    });
   },
 
   resetComp: (compId) => {
@@ -188,6 +370,67 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       },
       originals: newOrig,
       changeCount: count,
+    });
+  },
+
+  toggleComponentVisibility: (compId) => {
+    const { hiddenComponents } = get();
+    const next = new Set(hiddenComponents);
+    if (next.has(compId)) {
+      next.delete(compId);
+    } else {
+      next.add(compId);
+    }
+    set({ hiddenComponents: next });
+  },
+
+  showAllComponents: () => {
+    set({ hiddenComponents: new Set<string>() });
+  },
+
+  /* ─── Component management ─── */
+
+  addComponent: (comp) =>
+    set((s) => ({ components: { ...s.components, [comp.id]: comp } })),
+
+  removeComponent: (id) =>
+    set((s) => {
+      const next = { ...s.components };
+      delete next[id];
+      return { components: next, selectedId: s.selectedId === id ? null : s.selectedId };
+    }),
+
+  /* ─── Multi-sheet actions ─── */
+
+  setSheets: (sheets) =>
+    set({ sheets, activeSheetIndex: 0, totalSheets: sheets.length }),
+
+  setActiveSheet: (index) => {
+    const { sheets } = get();
+    if (index < 0 || index >= sheets.length) return;
+    const sheet = sheets[index];
+
+    // Auto-hide non-essential layers for cleaner sales view
+    const hiddenByDefault = new Set([
+      "Hatch (ANSI)",
+      "Hidden (ANSI)",
+      "Border",
+      "Border (ANSI)",
+    ]);
+    const visible = new Set(
+      sheet.layers
+        .filter((l) => !hiddenByDefault.has(l.name))
+        .map((l) => l.name)
+    );
+
+    set({
+      activeSheetIndex: index,
+      currentSheet: sheet.sheetNumber,
+      svgUrl: sheet.svgUrl,
+      dwgComponents: sheet.components,
+      dwgLayers: sheet.layers,
+      dwgMetadata: sheet.metadata ?? null,
+      visibleLayers: visible,
     });
   },
 }));

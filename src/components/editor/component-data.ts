@@ -14,6 +14,7 @@ export const TITAN_PGM130_COMPONENTS: Record<string, ComponentDef> = {
     icon: "▲",
     box: [3.5, 5, 9, 53],
     dims: { height: "15'-0 1/8\"", diameter: "9'-0\" (inside liner)" },
+    dimBlocks: {},
     mainDim: "height",
     constraints: [
       { label: "EPA stack height", value: "> 35 ft AGL", ok: true },
@@ -32,6 +33,7 @@ export const TITAN_PGM130_COMPONENTS: Record<string, ComponentDef> = {
     icon: "♫",
     box: [8.5, 28, 10, 25],
     dims: { height: "9'-8 3/4\"", width: "~16'-0\"" },
+    dimBlocks: {},
     mainDim: "height",
     constraints: [
       { label: "Acoustic target", value: '< 85 dBA @ 3ft', ok: true },
@@ -50,6 +52,7 @@ export const TITAN_PGM130_COMPONENTS: Record<string, ComponentDef> = {
     icon: "◆",
     box: [16, 28, 28, 40],
     dims: { height: "~25'-0\"", width: "~9'-8 3/4\" + 4'-0 3/8\"" },
+    dimBlocks: {},
     mainDim: "height",
     constraints: [
       { label: "SCR efficiency", value: "9.0–2.0 ppmvd @ 15% O2", ok: true },
@@ -69,6 +72,7 @@ export const TITAN_PGM130_COMPONENTS: Record<string, ComponentDef> = {
     icon: "≡",
     box: [38, 30, 8, 33],
     dims: { height: "~11'-0 1/8\"", width: "matching module" },
+    dimBlocks: {},
     mainDim: "height",
     constraints: [
       { label: "Flow uniformity", value: "< 15% CV", ok: true },
@@ -86,6 +90,7 @@ export const TITAN_PGM130_COMPONENTS: Record<string, ComponentDef> = {
     icon: "═",
     box: [44, 38, 16, 28],
     dims: { length: "~10'-2 3/4\"", height: "~5'-11 7/8\"" },
+    dimBlocks: {},
     mainDim: "length",
     constraints: [
       { label: "Mixing length", value: "> 3x hydraulic dia", ok: true },
@@ -104,6 +109,7 @@ export const TITAN_PGM130_COMPONENTS: Record<string, ComponentDef> = {
     icon: "↔",
     box: [42, 48, 5, 15],
     dims: { gap: "4'-0 1/8\"" },
+    dimBlocks: {},
     mainDim: "gap",
     constraints: [
       { label: "Thermal growth", value: "Accommodated", ok: true },
@@ -120,6 +126,7 @@ export const TITAN_PGM130_COMPONENTS: Record<string, ComponentDef> = {
     icon: "☀",
     box: [58, 32, 16, 33],
     dims: { height: "14'-1 7/16\"", width: "6'-3 1/2\"" },
+    dimBlocks: {},
     mainDim: "height",
     constraints: [
       { label: "Exhaust temp (T130)", value: "941°F normal", ok: true },

@@ -1,7 +1,32 @@
 "use client";
 
 import { useEditorStore } from "@/stores/editor-store";
-import { Check, AlertTriangle, ChevronUp, ChevronDown, RotateCcw } from "lucide-react";
+import { Check, AlertTriangle, ChevronUp, RotateCcw, Ruler, Eye, EyeOff } from "lucide-react";
+
+/** Better labels for DWG dimension keys */
+const DIM_LABELS: Record<string, string> = {
+  "X Scale": "Width (scale)",
+  "Y Scale": "Height (scale)",
+  "Z Scale": "Depth (scale)",
+  "X Position": "X Position",
+  "Y Position": "Y Position",
+  Rotation: "Rotation",
+  Height: "Height",
+  Width: "Width",
+};
+
+/** Dims to hide from the sales sidebar (not user-editable) */
+const HIDDEN_DIMS = new Set(["X Position", "Y Position", "Z Scale"]);
+
+/** Get display-friendly label for a dim key */
+function dimLabel(key: string): string {
+  return DIM_LABELS[key] || key;
+}
+
+/** Check if a dim should be shown in the sales sidebar */
+function isEditableDim(key: string): boolean {
+  return !HIDDEN_DIMS.has(key);
+}
 
 export function ComponentSidebar() {
   const {
@@ -9,14 +34,19 @@ export function ComponentSidebar() {
     selectedId,
     originals,
     changeCount,
+    hiddenComponents,
     select,
     updateDim,
     quickAdjust,
     resetComp,
+    toggleComponentVisibility,
+    showAllComponents,
   } = useEditorStore();
 
   const selected = selectedId ? components[selectedId] : null;
   const compList = Object.values(components);
+  const visibleList = compList.filter((c) => !hiddenComponents.has(c.id));
+  const hiddenCount = hiddenComponents.size;
   const compOriginals = selectedId ? originals[selectedId] : undefined;
 
   return (
@@ -24,22 +54,34 @@ export function ComponentSidebar() {
       {/* Header */}
       <div className="px-[18px] py-3.5 border-b border-[rgba(0,60,160,0.08)] flex items-center justify-between bg-[#fafbfd]">
         <span className="text-[11px] font-bold text-[#a5b8d4] uppercase tracking-[0.8px]">
-          {selected ? selected.name : `Components — ${compList.length} Detected`}
+          {selected ? selected.name : `Components — ${visibleList.length} Shown`}
         </span>
-        {selected && (
-          <button
-            onClick={() => select(null)}
-            className="w-[26px] h-[26px] rounded-[7px] flex items-center justify-center
-                       text-[#a5b8d4] hover:bg-[#e6eeff] hover:text-[#002e81] transition-colors text-sm"
-          >
-            ✕
-          </button>
-        )}
-        {!selected && changeCount > 0 && (
-          <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-[#002e81] text-white">
-            {changeCount} change{changeCount !== 1 ? "s" : ""}
-          </span>
-        )}
+        <div className="flex items-center gap-1.5">
+          {selected && (
+            <button
+              onClick={() => select(null)}
+              className="w-[26px] h-[26px] rounded-[7px] flex items-center justify-center
+                         text-[#a5b8d4] hover:bg-[#e6eeff] hover:text-[#002e81] transition-colors text-sm"
+            >
+              ✕
+            </button>
+          )}
+          {!selected && hiddenCount > 0 && (
+            <button
+              onClick={showAllComponents}
+              className="text-[10px] font-semibold px-2 py-0.5 rounded-full
+                         border border-[rgba(0,60,160,0.12)] text-[#a5b8d4]
+                         hover:bg-[#e6eeff] hover:text-[#002e81] transition-colors"
+            >
+              Show all ({hiddenCount} hidden)
+            </button>
+          )}
+          {!selected && changeCount > 0 && (
+            <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-[#002e81] text-white">
+              {changeCount} change{changeCount !== 1 ? "s" : ""}
+            </span>
+          )}
+        </div>
       </div>
 
       {/* Body */}
@@ -57,7 +99,9 @@ export function ComponentSidebar() {
         ) : (
           <ComponentList
             components={compList}
+            hiddenComponents={hiddenComponents}
             onSelect={(id) => select(id)}
+            onToggleVisibility={toggleComponentVisibility}
           />
         )}
       </div>
@@ -67,30 +111,123 @@ export function ComponentSidebar() {
 
 /* ─── Component List ─── */
 
+/** Categorize components for grouping in the sidebar */
+function categorizeComponent(name: string): string {
+  const n = name.toUpperCase();
+  if (n.startsWith("NOZZLE") || n.startsWith("N")) return "Nozzles";
+  if (n.includes("PORT")) return "Ports";
+  if (n.includes("GRID") || n.includes("DIST")) return "Internals";
+  if (n.includes("FRAME") || n.includes("CATALYST")) return "Structure";
+  if (n.includes("DUCT") || n.includes("AIR") || n.includes("OUTLET") || n.includes("TURBINE")) return "Flow Path";
+  return "Other";
+}
+
 function ComponentList({
   components,
+  hiddenComponents,
   onSelect,
+  onToggleVisibility,
 }: {
   components: { id: string; name: string; color: string; dims: Record<string, string>; mainDim: string }[];
+  hiddenComponents: Set<string>;
   onSelect: (id: string) => void;
+  onToggleVisibility: (id: string) => void;
 }) {
+  // Group components by category
+  const groups: Record<string, typeof components> = {};
+  for (const c of components) {
+    const cat = categorizeComponent(c.name);
+    if (!groups[cat]) groups[cat] = [];
+    groups[cat].push(c);
+  }
+
+  // Order: Flow Path, Internals, Structure, Ports, Nozzles, Other
+  const categoryOrder = ["Flow Path", "Internals", "Structure", "Ports", "Nozzles", "Other"];
+  const sortedCategories = categoryOrder.filter((cat) => groups[cat]?.length);
+
   return (
     <div>
-      {components.map((c) => (
-        <button
-          key={c.id}
-          onClick={() => onSelect(c.id)}
-          className="w-full flex items-center gap-2.5 px-[18px] py-2.5 text-left cursor-pointer
-                     border-b border-[rgba(0,60,160,0.03)] hover:bg-[#eef3ff] transition-colors"
-        >
-          <div
-            className="w-2 h-2 rounded-sm flex-shrink-0"
-            style={{ background: c.color }}
-          />
-          <span className="text-[12px] font-semibold text-[#001a4d] flex-1">{c.name}</span>
-          <span className="text-[10px] text-[#a5b8d4] font-medium">{c.dims[c.mainDim]}</span>
-        </button>
-      ))}
+      {sortedCategories.map((category) => {
+        const items = groups[category];
+        const allHidden = items.every((c) => hiddenComponents.has(c.id));
+        const someHidden = items.some((c) => hiddenComponents.has(c.id));
+
+        return (
+          <div key={category}>
+            {/* Category header */}
+            <div className="flex items-center px-[18px] py-2 bg-[#f5f7fa] border-b border-[rgba(0,60,160,0.05)]">
+              <span className="text-[10px] font-bold text-[#a5b8d4] uppercase tracking-[0.8px] flex-1">
+                {category}
+                <span className="ml-1.5 text-[#c5d0e0] font-medium normal-case">
+                  ({items.filter((c) => !hiddenComponents.has(c.id)).length}/{items.length})
+                </span>
+              </span>
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  // Toggle all in this category
+                  for (const c of items) {
+                    if (allHidden) {
+                      // Show all: only toggle hidden ones
+                      if (hiddenComponents.has(c.id)) onToggleVisibility(c.id);
+                    } else {
+                      // Hide all: only toggle visible ones
+                      if (!hiddenComponents.has(c.id)) onToggleVisibility(c.id);
+                    }
+                  }
+                }}
+                className="p-1 rounded text-[#a5b8d4] hover:text-[#002e81] hover:bg-[#e6eeff] transition-colors"
+                title={allHidden ? `Show all ${category}` : `Hide all ${category}`}
+              >
+                {allHidden ? <EyeOff className="w-3 h-3" /> : someHidden ? <Eye className="w-3 h-3 opacity-50" /> : <Eye className="w-3 h-3" />}
+              </button>
+            </div>
+
+            {/* Component items */}
+            {items.map((c) => {
+              const isHidden = hiddenComponents.has(c.id);
+              return (
+                <div
+                  key={c.id}
+                  className={`flex items-center gap-1.5 px-[18px] py-2 text-left
+                             border-b border-[rgba(0,60,160,0.03)] transition-colors
+                             ${isHidden ? "opacity-40" : "hover:bg-[#eef3ff]"}`}
+                >
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onToggleVisibility(c.id);
+                    }}
+                    className="w-5 h-5 flex items-center justify-center rounded
+                               text-[#a5b8d4] hover:text-[#002e81] hover:bg-[#e6eeff]
+                               transition-colors flex-shrink-0"
+                    title={isHidden ? "Show component" : "Hide component"}
+                  >
+                    {isHidden ? <EyeOff className="w-3 h-3" /> : <Eye className="w-3 h-3" />}
+                  </button>
+                  <button
+                    onClick={() => !isHidden && onSelect(c.id)}
+                    className={`flex items-center gap-2 flex-1 min-w-0 ${isHidden ? "cursor-default" : "cursor-pointer"}`}
+                  >
+                    <div
+                      className="w-2 h-2 rounded-sm flex-shrink-0"
+                      style={{ background: isHidden ? "#ccc" : c.color }}
+                    />
+                    <span className={`text-[12px] font-semibold flex-1 truncate ${isHidden ? "text-[#a5b8d4]" : "text-[#001a4d]"}`}>
+                      {c.name}
+                    </span>
+                    {!isHidden && (
+                      <span className="text-[10px] text-[#a5b8d4] font-medium flex-shrink-0">
+                        {c.dims[c.mainDim]}
+                      </span>
+                    )}
+                  </button>
+                </div>
+              );
+            })}
+          </div>
+        );
+      })}
     </div>
   );
 }
@@ -134,17 +271,21 @@ function SelectedDetail({
 
       {/* Dimensions */}
       <div className="px-[18px] py-3.5 border-b border-[rgba(0,60,160,0.05)]">
-        <div className="text-[10px] font-bold text-[#a5b8d4] uppercase tracking-[1px] mb-2">
+        <div className="text-[10px] font-bold text-[#a5b8d4] uppercase tracking-[1px] mb-2 flex items-center gap-1.5">
+          <Ruler className="w-3 h-3" />
           Dimensions
         </div>
-        {Object.entries(comp.dims).map(([key, val]) => {
+        {Object.entries(comp.dims)
+          .filter(([key]) => isEditableDim(key))
+          .map(([key, val]) => {
           const isChanged = originals?.[key] && originals[key] !== val;
           return (
             <div key={key} className="flex items-center gap-2 py-1.5">
-              <span className="text-[12px] text-[#666] w-[55px] flex-shrink-0 font-medium capitalize">
-                {key}
+              <span className="text-[12px] text-[#666] w-[80px] flex-shrink-0 font-medium">
+                {dimLabel(key)}
               </span>
               <input
+                key={`${key}-${val}`}
                 type="text"
                 defaultValue={val as string}
                 onBlur={(e) => onDimChange(key, e.target.value)}
@@ -162,6 +303,11 @@ function SelectedDetail({
                                : "bg-white border-[rgba(0,60,160,0.12)]"
                            }`}
               />
+              {isChanged && originals?.[key] && (
+                <span className="text-[9px] text-[#a5b8d4] whitespace-nowrap" title={`Was: ${originals[key]}`}>
+                  was {originals[key]}
+                </span>
+              )}
             </div>
           );
         })}

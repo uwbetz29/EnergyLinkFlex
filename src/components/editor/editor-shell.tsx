@@ -5,19 +5,63 @@ import { useSearchParams } from "next/navigation";
 import { useEditorStore } from "@/stores/editor-store";
 import { TITAN_PGM130_COMPONENTS } from "./component-data";
 import { DrawingCanvas } from "./drawing-canvas";
+import { SvgDrawingCanvas } from "./svg-drawing-canvas";
 import { ComponentSidebar } from "./component-sidebar";
 import { NLBar } from "./nl-bar";
 import { StageNav } from "./stage-nav";
 import Link from "next/link";
-import { ArrowLeft, Undo2, Download, Loader2 } from "lucide-react";
+import { ArrowLeft, Undo2, Download, Loader2, Layers } from "lucide-react";
 import { getProject } from "@/app/projects/actions";
+import { toEditorComponents, parseSvgViewBox } from "@/lib/dwg/extractor";
+import type { AiSection } from "@/lib/ai/prescan";
+import type { ComponentDef } from "@/stores/editor-store";
+
+/** Convert AI pre-scan sections into editor ComponentDefs */
+function aiSectionsToComponents(
+  sections: AiSection[]
+): Record<string, ComponentDef> {
+  const comps: Record<string, ComponentDef> = {};
+  for (let i = 0; i < sections.length; i++) {
+    const s = sections[i];
+    const id = `ai-${i}-${s.name.replace(/\s+/g, "-").toLowerCase()}`;
+    comps[id] = {
+      id,
+      name: s.name,
+      type: s.type,
+      color: s.color,
+      icon: s.icon,
+      box: s.box,
+      dims: s.dims,
+      dimBlocks: s.dimBlocks,
+      mainDim: s.mainDim,
+      constraints: [],
+      downstream: s.downstream,
+      upstream: s.upstream,
+      notes: s.notes,
+    };
+  }
+  return comps;
+}
 
 export function EditorShell() {
   const searchParams = useSearchParams();
   const projectId = searchParams.get("project");
 
-  const { changeCount, projectName, setComponents, setPdfUrl, setProject } =
-    useEditorStore();
+  const {
+    changeCount,
+    projectName,
+    drawingType,
+    sheets,
+    activeSheetIndex,
+    setComponents,
+    setPdfUrl,
+    setSvgUrl,
+    setProject,
+    setDrawingType,
+    setDwgData,
+    setSheets,
+    setActiveSheet,
+  } = useEditorStore();
 
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -28,6 +72,7 @@ export function EditorShell() {
       setComponents(TITAN_PGM130_COMPONENTS);
       setPdfUrl("/drawings/24189-CS1-0001_0.pdf");
       setProject("demo", "TITAN PGM 130 — Demo Drawing");
+      setDrawingType("pdf");
       setLoading(false);
       return;
     }
@@ -43,9 +88,98 @@ export function EditorShell() {
         if (cancelled) return;
 
         setProject(project.id, project.name);
+        setDrawingType(project.drawing_type);
 
-        if (project.pdf_url) {
-          setPdfUrl(project.pdf_url);
+        if (project.drawing_type === "dwg") {
+          // Multi-sheet DWG: load all sheets if available
+          if (project.dwg_sheets && project.dwg_sheets.length > 0) {
+            setSheets(project.dwg_sheets);
+            // setActiveSheet(0) is called inside setSheets,
+            // which sets svgUrl, components, layers, etc. for sheet 0
+            const firstSheet = project.dwg_sheets[0];
+
+            // Convert first sheet's components to editor ComponentDefs
+            let viewBox = { minX: 0, minY: 0, width: 1600, height: 900 };
+            if (firstSheet.svgUrl) {
+              try {
+                const svgRes = await fetch(firstSheet.svgUrl, {
+                  headers: { Range: "bytes=0-500" },
+                });
+                const svgHeader = await svgRes.text();
+                viewBox = parseSvgViewBox(svgHeader);
+              } catch {
+                // Use default viewBox
+              }
+            }
+
+            setDwgData(
+              firstSheet.components,
+              firstSheet.layers,
+              firstSheet.metadata
+            );
+            const editorComps = toEditorComponents(
+              firstSheet.components,
+              viewBox
+            );
+            setComponents(editorComps);
+            useEditorStore.getState().toggleOverlays();
+          } else {
+            // Single-sheet DWG (backward compat)
+            if (project.svg_url) {
+              setSvgUrl(project.svg_url);
+            }
+            if (project.dwg_components && project.dwg_layers) {
+              setDwgData(
+                project.dwg_components,
+                project.dwg_layers,
+                project.dwg_metadata
+              );
+
+              // Prefer AI-identified sections over auto-extracted DWG blocks
+              if (
+                project.dwg_ai_sections &&
+                project.dwg_ai_sections.sections?.length > 0
+              ) {
+                const editorComps = aiSectionsToComponents(
+                  project.dwg_ai_sections.sections
+                );
+                setComponents(editorComps);
+                console.log(
+                  `[ELF] Loaded ${Object.keys(editorComps).length} AI-identified sections`
+                );
+              } else {
+                // Fallback: auto-extracted DWG blocks
+                let viewBox = {
+                  minX: 0,
+                  minY: 0,
+                  width: 1600,
+                  height: 900,
+                };
+                if (project.svg_url) {
+                  try {
+                    const svgRes = await fetch(project.svg_url, {
+                      headers: { Range: "bytes=0-500" },
+                    });
+                    const svgHeader = await svgRes.text();
+                    viewBox = parseSvgViewBox(svgHeader);
+                  } catch {
+                    // Use default viewBox
+                  }
+                }
+                const editorComps = toEditorComponents(
+                  project.dwg_components,
+                  viewBox
+                );
+                setComponents(editorComps);
+              }
+              useEditorStore.getState().toggleOverlays();
+            }
+          }
+        } else {
+          // PDF project: existing flow
+          if (project.pdf_url) {
+            setPdfUrl(project.pdf_url);
+          }
         }
       } catch (err) {
         if (!cancelled) {
@@ -62,24 +196,24 @@ export function EditorShell() {
     return () => {
       cancelled = true;
     };
-  }, [projectId, setPdfUrl, setProject, setComponents]);
+  }, [projectId, setPdfUrl, setSvgUrl, setProject, setComponents, setDrawingType, setDwgData, setSheets]);
 
   if (loading) {
     return (
-      <div className="flex flex-col h-screen items-center justify-center bg-[#001030]">
-        <Loader2 className="w-8 h-8 text-white/30 animate-spin" />
-        <div className="text-white/30 text-sm mt-3">Loading project...</div>
+      <div className="flex flex-col h-screen items-center justify-center bg-[#f0f0f4]">
+        <Loader2 className="w-8 h-8 text-gray-300 animate-spin" />
+        <div className="text-gray-400 text-sm mt-3">Loading project...</div>
       </div>
     );
   }
 
   if (error) {
     return (
-      <div className="flex flex-col h-screen items-center justify-center bg-[#001030] gap-4">
-        <div className="text-red-400 text-sm">{error}</div>
+      <div className="flex flex-col h-screen items-center justify-center bg-[#f0f0f4] gap-4">
+        <div className="text-red-500 text-sm">{error}</div>
         <Link
           href="/"
-          className="text-white/50 hover:text-white text-sm underline"
+          className="text-gray-400 hover:text-gray-700 text-sm underline"
         >
           Back to Dashboard
         </Link>
@@ -114,9 +248,14 @@ export function EditorShell() {
         </div>
         <div className="w-px h-6 bg-white/12" />
 
-        {/* Project name */}
-        <div className="text-white/90 text-[13px] font-semibold flex-1 truncate">
+        {/* Project name + drawing type badge */}
+        <div className="text-white/90 text-[13px] font-semibold flex-1 truncate flex items-center gap-2">
           {projectName || "Untitled Project"}
+          {drawingType === "dwg" && (
+            <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
+              DWG
+            </span>
+          )}
         </div>
 
         {/* Stage navigation */}
@@ -140,13 +279,61 @@ export function EditorShell() {
         </div>
       </div>
 
+      {/* ─── Sheet Tabs (multi-sheet DWG only) ─── */}
+      {sheets.length > 1 && (
+        <div
+          className="h-[36px] flex items-center px-4 gap-1 flex-shrink-0 border-b border-gray-200"
+          style={{ background: "#f8f9fc" }}
+        >
+          <Layers className="w-3.5 h-3.5 text-gray-400 mr-1.5" />
+          <span className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider mr-2">
+            Sheets
+          </span>
+          {sheets.map((sheet, idx) => {
+            const isActive = idx === activeSheetIndex;
+            return (
+              <button
+                key={sheet.sheetNumber}
+                onClick={() => {
+                  if (!isActive) {
+                    setActiveSheet(idx);
+                    // Re-convert components for the new sheet
+                    const s = sheets[idx];
+                    const editorComps = toEditorComponents(
+                      s.components,
+                      { minX: 0, minY: 0, width: 1600, height: 900 }
+                    );
+                    setComponents(editorComps);
+                  }
+                }}
+                className={`px-3 py-1 rounded-md text-[11px] font-semibold transition-all ${
+                  isActive
+                    ? "bg-white text-blue-700 border border-blue-200 shadow-sm"
+                    : "text-gray-500 hover:text-gray-700 hover:bg-white/60 border border-transparent"
+                }`}
+              >
+                {sheet.label}
+                {sheet.correlationMap && Object.keys(sheet.correlationMap).length > 0 && (
+                  <span className="ml-1.5 text-[9px] text-emerald-500 font-bold">
+                    ↔{Object.keys(sheet.correlationMap).length}
+                  </span>
+                )}
+              </button>
+            );
+          })}
+          <span className="ml-auto text-[10px] text-gray-400">
+            {sheets.reduce((n, s) => n + s.components.length, 0)} components across {sheets.length} views
+          </span>
+        </div>
+      )}
+
       {/* ─── Main Area ─── */}
       <div className="flex-1 flex overflow-hidden">
-        <DrawingCanvas />
+        {drawingType === "dwg" ? <SvgDrawingCanvas /> : <DrawingCanvas />}
         <ComponentSidebar />
       </div>
 
-      {/* ─── NL Bar ─── */}
+      {/* AI Configurator — natural language dimension modification */}
       <NLBar />
     </div>
   );
