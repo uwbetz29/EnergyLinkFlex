@@ -26,6 +26,7 @@
  */
 
 import { isAnnotationElement } from "./annotations";
+import { AXIS_TOL, buildAxisMap, axisGrowth, placeOnAxis, type Segment } from "./axis-map";
 
 export interface StretchResult {
   ok: boolean;
@@ -316,10 +317,16 @@ export function applySvgStretch(
  *   - before a zone (lower coord)  → no effect
  * fastPosition() reads geometry attributes (never the transform), so every zone
  * classifies against ORIGINAL coords. That makes the result exact and
- * order-independent for DISJOINT same-axis zones and for mixed-axis stretches.
- * Overlapping/nested same-axis zones are ambiguous (the per-view spatial-scoping
- * gap): the later of any overlapping same-axis pair is skipped with a warning
- * rather than silently double-scaled.
+ * order-independent for mixed-axis stretches and any same-axis set of zones
+ * that are pairwise DISJOINT or properly NESTED: those compose into ONE
+ * monotonic piecewise-linear coordinate map per axis (see ./axis-map.ts and
+ * docs/superpowers/specs/2026-07-06-nested-zone-stretch-design.md). A container
+ * zone distributes its (residual) delta across the exclusive gaps between its
+ * children, proportional to gap height; a held (delta 0) child stays fixed but
+ * still partitions its container. Coincident zones (equal within tolerance)
+ * merge with summed deltas. Only PARTIAL overlaps (neither contains the other)
+ * remain ambiguous: the later spec of such a pair is skipped with a warning,
+ * as is any overlapping horizontal pair with mismatched viewRegions.
  */
 export function applyMultiStretch(
   svgRoot: SVGSVGElement,
@@ -329,8 +336,10 @@ export function applyMultiStretch(
   const maxElements = opts.maxElements ?? DEFAULT_MAX_ELEMENTS;
   const maxMs = opts.maxMs ?? DEFAULT_MAX_MS;
 
-  const active = stretches.filter((s) => Math.abs(s.delta) >= 0.01);
-  if (active.length === 0) return { ok: true, transformed: 0 };
+  // All-no-op fast path (a zero-delta spec only matters as a held child of a
+  // NONZERO container, so an all-zero set can never produce a transform).
+  if (stretches.every((s) => Math.abs(s.delta) < 0.01))
+    return { ok: true, transformed: 0 };
 
   const modelSpace = findModelSpace(svgRoot);
   if (!modelSpace) {
@@ -346,49 +355,107 @@ export function applyMultiStretch(
     return { ok: false, reason: "bad viewBox", transformed: 0 };
   const [vbX, vbY, vbW, vbH] = vb;
 
-  // Normalize each stretch to a 1D affine along its axis, in Model_Space coords.
+  // Normalize each stretch to a 1D interval along its axis, in Model_Space coords.
   // vertical: internal Y = -(viewBox Y) due to the matrix(1,0,0,-1) flip.
-  type Spec = { axis: "x" | "y"; near: number; far: number; scale: number; delta: number;
+  type Spec = { axis: "x" | "y"; near: number; far: number; delta: number;
                 viewRegion?: { xMin: number; xMax: number } };
-  const specs: Spec[] = [];
-  for (const s of active) {
+  const rawSpecs: Spec[] = [];
+  for (const s of stretches) {
     if (s.direction === "vertical") {
       const far = -s.svgBounds.top;      // internal Y increases upward
       const near = -s.svgBounds.bottom;  // near edge = scale origin
-      const h = far - near;
-      if (h <= 0) continue;
-      specs.push({ axis: "y", near, far, scale: (h + s.delta) / h, delta: s.delta, viewRegion: s.viewRegion });
+      if (far - near <= 0) continue;
+      rawSpecs.push({ axis: "y", near, far, delta: s.delta, viewRegion: s.viewRegion });
     } else {
       const near = s.svgBounds.left;
       const far = s.svgBounds.right;
-      const w = far - near;
-      if (w <= 0) continue;
-      specs.push({ axis: "x", near, far, scale: (w + s.delta) / w, delta: s.delta, viewRegion: s.viewRegion });
+      if (far - near <= 0) continue;
+      rawSpecs.push({ axis: "x", near, far, delta: s.delta, viewRegion: s.viewRegion });
     }
   }
 
-  // Fail safe on overlapping same-axis zones (keep the first; warn on the rest).
+  // Zero-delta filtering: drop no-op specs UNLESS they participate in a nesting
+  // relationship with a nonzero-delta spec on the same axis — a held (delta 0)
+  // child of a container carrying residual, or a container of a nonzero child.
+  // Held children must survive so they partition the container's gaps.
+  const contains = (a: Spec, b: Spec) =>
+    a.near <= b.near + AXIS_TOL && a.far >= b.far - AXIS_TOL;
+  const specs = rawSpecs.filter(
+    (sp) =>
+      Math.abs(sp.delta) >= 0.01 ||
+      rawSpecs.some(
+        (o) =>
+          o !== sp && o.axis === sp.axis && Math.abs(o.delta) >= 0.01 &&
+          (contains(o, sp) || contains(sp, o))
+      )
+  );
+  if (specs.length === 0) return { ok: true, transformed: 0 };
+
+  // Nesting classification (after TOL snapping): disjoint zones compose freely;
+  // coincident zones MERGE (summed delta); properly nested zones compose via the
+  // axis map; PARTIAL overlaps (and overlapping horizontals with mismatched
+  // viewRegions) keep the earlier spec and skip the later one with a warning.
+  const regionKey = (sp: Spec) =>
+    sp.viewRegion ? `${sp.viewRegion.xMin}:${sp.viewRegion.xMax}` : "";
   const kept: Spec[] = [];
   for (const sp of specs) {
-    const clash = kept.find(
-      (k) => k.axis === sp.axis && sp.near < k.far && sp.far > k.near
-    );
-    if (clash) {
+    let skip = false;
+    let merged = false;
+    for (const k of kept) {
+      if (k.axis !== sp.axis) continue;
+      const overlap = Math.min(k.far, sp.far) - Math.max(k.near, sp.near);
+      if (overlap <= AXIS_TOL) continue; // disjoint
+      if (regionKey(k) !== regionKey(sp)) { skip = true; break; } // mismatched view scope
+      const kHasSp = contains(k, sp);
+      const spHasK = contains(sp, k);
+      if (kHasSp && spHasK) {
+        // coincident: merge into the (larger) kept bounds with summed delta
+        k.near = Math.min(k.near, sp.near);
+        k.far = Math.max(k.far, sp.far);
+        k.delta += sp.delta;
+        merged = true;
+        break;
+      }
+      if (kHasSp || spHasK) continue; // nested: the axis map composes it
+      skip = true; // partial overlap: not physically meaningful
+      break;
+    }
+    if (skip) {
       console.warn(
-        `[ELF stretch] skipping overlapping ${sp.axis}-zone [${sp.near.toFixed(0)}, ${sp.far.toFixed(0)}] ` +
-          `(nested-zone spatial scoping not yet supported)`
+        `[ELF stretch] skipping partially-overlapping ${sp.axis}-zone [${sp.near.toFixed(0)}, ${sp.far.toFixed(0)}] ` +
+          `(neither zone contains the other, or viewRegions mismatch)`
       );
       continue;
     }
-    kept.push(sp);
+    if (!merged) kept.push(sp);
   }
   if (kept.length === 0) return { ok: true, transformed: 0 };
 
-  let sumV = 0, sumH = 0;
+  // Build ONE composed piecewise-linear map per (axis, viewRegion) group.
+  type AxisGroup = { axis: "x" | "y"; viewRegion?: { xMin: number; xMax: number };
+                     segments: Segment[] };
+  const groupMap = new Map<string, Spec[]>();
   for (const sp of kept) {
-    if (sp.axis === "y") sumV += sp.delta;
-    else sumH += sp.delta;
+    const key = `${sp.axis}|${regionKey(sp)}`;
+    const list = groupMap.get(key);
+    if (list) list.push(sp);
+    else groupMap.set(key, [sp]);
   }
+  const groups: AxisGroup[] = [];
+  let sumV = 0, sumH = 0;
+  for (const list of groupMap.values()) {
+    const segments = buildAxisMap(
+      list.map((sp) => ({ near: sp.near, far: sp.far, delta: sp.delta }))
+    );
+    if (segments.length === 0) continue;
+    groups.push({ axis: list[0].axis, viewRegion: list[0].viewRegion, segments });
+    // viewBox growth derives from the map's tail (not a blind delta sum), so it
+    // stays consistent with the geometry even when a container's delta is residual.
+    const growth = axisGrowth(segments);
+    if (list[0].axis === "y") sumV += growth;
+    else sumH += growth;
+  }
+  if (groups.length === 0) return { ok: true, transformed: 0 };
 
   const children = Array.from(modelSpace.children) as SVGGElement[];
 
@@ -418,25 +485,17 @@ export function applyMultiStretch(
     const annotation = isAnnotationElement(child);
 
     let sx = 1, sy = 1, tx = 0, ty = 0;
-    for (const sp of kept) {
+    for (const g of groups) {
       // Width scoping: skip elements outside the edited view.
-      if (sp.viewRegion && (pos.x < sp.viewRegion.xMin || pos.x > sp.viewRegion.xMax)) continue;
+      if (g.viewRegion && (pos.x < g.viewRegion.xMin || pos.x > g.viewRegion.xMax)) continue;
 
-      const c = sp.axis === "y" ? pos.y : pos.x;
-      let t = 0, sc = 1;
-      if (c > sp.far) {
-        t = sp.delta;                         // past the zone: rigid shift (all element kinds)
-      } else if (c >= sp.near) {
-        if (annotation) {
-          t = 0;                              // in-zone annotation: hold position, NEVER scale
-        } else {
-          sc = sp.scale;                      // in-zone equipment: scale about the near edge
-          t = sp.near * (1 - sp.scale);
-        }
-      } else {
-        continue;                             // before the zone: untouched
-      }
-      if (sp.axis === "y") { sy *= sc; ty += t; }
+      const c = g.axis === "y" ? pos.y : pos.x;
+      const p = placeOnAxis(g.segments, c);
+      // Annotations NEVER scale: they ride their segment's near-edge offset
+      // (the shift accumulated below the segment). Equipment maps exactly: c ↦ f(c).
+      const sc = annotation ? 1 : p.scale;
+      const t = annotation ? p.annTranslate : p.translate;
+      if (g.axis === "y") { sy *= sc; ty += t; }
       else { sx *= sc; tx += t; }
     }
 

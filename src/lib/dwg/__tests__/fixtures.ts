@@ -19,3 +19,27 @@ export function makeTwoViewSvg(): string {
       <use href="#Borders ELC-D" x="1000" y="500"/>
     </g></g></svg>`;
 }
+
+/** Single-view stack mirroring the real 24081 Sheet_2 nesting: the overall
+ *  container zone (internal y[291.5, 891.5], the 50'-0") fully contains the
+ *  silencer child (y[531.3, 627.3], the 8'-0"). Probe equipment lines and
+ *  annotations sit BELOW / in the lower gap / in the child / in the upper gap /
+ *  ABOVE, so a black-box test can read each segment's transform. Coordinates are
+ *  Model_Space internal (Y-up); attribute y == fastPosition y (the wrapper carries
+ *  the matrix(1,0,0,-1) flip). Zones are passed to applyMultiStretch as svgBounds
+ *  with negated top/bottom. */
+export function makeNestedStackSvg(): string {
+  // horizontal segment; midpoint = (x+1, y) so fastPosition y is exact.
+  const eq = (x: number, y: number) => `<line x1="${x}" y1="${y}" x2="${x + 2}" y2="${y}"/>`;
+  // probes: below(200) lowerGap(400) child(580) upperGap(750) above(950)
+  const probes = [200, 400, 580, 750, 950].map((y) => eq(100, y)).join("");
+  // filler equipment spread through the gaps and child for realistic classification
+  const filler = [340, 460, 560, 600, 700, 820].map((y) => eq(120, y)).join("");
+  return `<svg viewBox="0 -1000 200 1000" xmlns="http://www.w3.org/2000/svg">
+    <g transform="matrix(1,0,0,-1,0,0)"><g id="*Model_Space">
+      ${probes}${filler}
+      <text x="100" y="400">GAP_A</text>
+      <text x="100" y="580">CHILD_A</text>
+      <text x="100" y="950">ABOVE_A</text>
+    </g></g></svg>`;
+}

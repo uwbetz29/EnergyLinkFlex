@@ -87,6 +87,16 @@ Invariants of a well-formed map:
   from the partition AND the denominator (no divide-by-zero).
   - Note: proportional-to-height distribution gives every gap the SAME scale
     `(ΣgapH + d) / ΣgapH` — a useful test anchor.
+- **Held (zero-delta) child:** a component zone with `delta == 0` that is contained
+  in a container carrying nonzero residual is **held fixed** — its segment has
+  `scale = 1` and it is excluded from the gap distribution, but it still partitions
+  the container (it creates the gaps on either side). This is the real
+  redistribute-golden case (overall grows, silencer unchanged).
+- **Zero-delta filtering:** the current `active = filter(|delta| >= 0.01)` must NOT
+  drop a zero-delta spec that participates in a nesting relationship with a
+  nonzero-delta spec (a held child, or a container of a nonzero child). A zero-delta
+  spec that is neither a container of, nor contained in, any nonzero-delta spec is
+  dropped as before.
 - **Outside all zones:** identity (scale 1). The tail above the topmost zone rides
   the total accumulated growth via `mappedStart`.
 
@@ -153,7 +163,7 @@ by which specs it passes and with what delta:
 | Mode | Caller feeds the engine | Result |
 |---|---|---|
 | **Derive** (app default) | Leaf/component specs only. The spanning total is NOT a spec — its number is revalued by `revalueSpanningDims`, its geometry rides the map. | Components are disjoint → the axis map has no containers; existing behavior. |
-| **Redistribute** | Component specs PLUS the container spec whose `delta` = **residual** = `desiredTotalDelta − Σ(childDeltas)`. | Container distributes its residual across exclusive gaps; children scale by their own deltas. |
+| **Redistribute** | Component specs (INCLUDING unchanged ones as `delta = 0` **held children**, so the gap partition is defined) PLUS the container spec whose `delta` = **residual** = `desiredTotalDelta − Σ(childDeltas)`. | Container distributes its residual across exclusive gaps; children scale by their own deltas; held children stay fixed. |
 
 **Contract boundary:** the engine distributes each container spec's `delta` across
 that container's exclusive gaps. The caller is responsible for setting a container's
