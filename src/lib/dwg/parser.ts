@@ -7,6 +7,7 @@
 
 import { Dwg_File_Type, LibreDwg } from "@mlightcad/libredwg-web";
 import type { DwgDatabase } from "@mlightcad/libredwg-web";
+import { hardenLibreDwg } from "./harden";
 import type {
   DwgAttrib,
   DwgBlockDef,
@@ -23,6 +24,8 @@ let cachedLib: Awaited<ReturnType<typeof LibreDwg.create>> | null = null;
 async function getLib(wasmDir: string) {
   if (!cachedLib) {
     cachedLib = await LibreDwg.create(wasmDir);
+    // Guard the MTEXT-column OOB crash that aborts parses on some DWGs.
+    hardenLibreDwg(cachedLib);
   }
   return cachedLib;
 }
