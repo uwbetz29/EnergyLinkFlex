@@ -1,3 +1,10 @@
+import { createAnthropic } from "@ai-sdk/anthropic";
+
+// Explicit baseURL so the direct-Anthropic path is independent of any ambient
+// ANTHROPIC_BASE_URL (e.g. Claude Code sets it to the bare host, which drops the
+// /v1 and 404s). Only used for local QA (see THINKING_MODEL below).
+const anthropicDirect = createAnthropic({ baseURL: "https://api.anthropic.com/v1" });
+
 /**
  * Shared SCR/CO Catalyst System domain knowledge for AI prompts.
  * Used by both the modify endpoint and the identify-component endpoint.
@@ -11,8 +18,15 @@
  * Upgraded 2026-07-05: claude-sonnet-4.6 -> claude-opus-4.8. Escalate to
  * "anthropic/claude-fable-5" if Opus reasoning is still insufficient.
  * NOTE: Opus 4.8 / Fable 5 REJECT `temperature` (400). Do not pass it.
+ *
+ * Provider selection: when ANTHROPIC_API_KEY is set (local QA), call Anthropic
+ * DIRECTLY via @ai-sdk/anthropic to bypass the Vercel AI Gateway billing gate.
+ * Otherwise use the AI Gateway slug (dots for the version) that production uses.
+ * Both resolve to Opus 4.8, so prod behavior is unchanged.
  */
-export const THINKING_MODEL = "anthropic/claude-opus-4.8";
+export const THINKING_MODEL = process.env.ANTHROPIC_API_KEY
+  ? anthropicDirect("claude-opus-4-8")
+  : "anthropic/claude-opus-4.8";
 
 export const SCR_SYSTEM_KNOWLEDGE = `## SCR/CO Catalyst System Engineering Knowledge
 
