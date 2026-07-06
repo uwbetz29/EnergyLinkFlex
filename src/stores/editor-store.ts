@@ -75,6 +75,10 @@ export interface EditorState {
   /** Incremented on every dim change to trigger SVG re-stretch */
   stretchVersion: number;
 
+  /** User-facing warning when a stretch was rolled back (drawing left unchanged) */
+  stretchWarning: string | null;
+  setStretchWarning: (msg: string | null) => void;
+
   /* Undo / Redo */
   history: { compId: string; dimKey: string; prevValue: string; newValue: string }[];
   historyIndex: number;
@@ -158,6 +162,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   originals: {},
   changeCount: 0,
   stretchVersion: 0,
+  stretchWarning: null,
 
   history: [],
   historyIndex: -1,
@@ -196,6 +201,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     });
   },
   setSvgViewBox: (vb) => set({ svgViewBox: vb }),
+  setStretchWarning: (msg) => set({ stretchWarning: msg }),
   toggleLayer: (layerName) =>
     set((s) => {
       const next = new Set(s.visibleLayers);

@@ -4,12 +4,17 @@ import { useEffect, useRef, useCallback, useState } from "react";
 import { useEditorStore } from "@/stores/editor-store";
 import {
   parseDimInches,
+  formatDimInches,
   dimKeyToDirection,
-  applySvgStretch,
+  applyMultiStretch,
   undoStretches,
   saveOriginalViewBox,
   computeStretchDelta,
+  findModelSpace,
 } from "@/lib/dwg/svg-stretch";
+import type { StretchParams } from "@/lib/dwg/svg-stretch";
+import { computeViewRegions, viewOf } from "@/lib/dwg/view-model";
+import { isAnnotationBlockName } from "@/lib/dwg/annotations";
 import type { ComponentDef } from "@/stores/editor-store";
 
 /* ─── Constants ─── */
@@ -146,20 +151,6 @@ interface InlineEdit {
  * 5. CSS rule: non-scaling-stroke for consistent line weight at any zoom
  * 6. Keep blue dimension lines, cyan, lime strokes as-is
  */
-/** Annotation block names that are CAD clutter — not needed for sales configurator.
- *  These create filled-looking blobs because their tiny shapes (< 1 SVG unit)
- *  get rendered with 0.5px strokes that are thicker than the shape itself. */
-const ANNOTATION_BLOCKS = new Set([
-  "CriticalFeature",     // Nozzle cross-hair markers
-  "Datum Identifier1",   // Datum triangle markers
-  "DatumFilled45",       // Datum filled markers
-  "Filled-1",            // Filled arrowheads
-  "_Closed",             // Closed arrowheads
-  "Perf Puddle",         // Perforation pattern
-  "DESIGN STATE",        // Design state stamp
-  "PRELIMINARY ISSUE",   // Preliminary issue stamp
-]);
-
 /** Layers that create dense hatching / visual noise for sales view */
 const HIDDEN_LAYERS = new Set([
   "Hatch (ANSI)",
@@ -206,12 +197,7 @@ function postProcessSvgDom(svgRoot: SVGSVGElement) {
   //    (< 1 SVG unit) get 0.5px strokes that fill the shape area.
   svgRoot.querySelectorAll("use").forEach((use) => {
     const href = (use.getAttribute("href") || "").replace("#", "");
-    if (
-      ANNOTATION_BLOCKS.has(href) ||
-      href.includes("Border") ||
-      href.includes("Title Block") ||
-      href.includes("PROJECTION")
-    ) {
+    if (isAnnotationBlockName(href)) {
       const parent = use.parentElement;
       if (parent) parent.style.display = "none";
     }
@@ -235,6 +221,15 @@ function postProcessSvgDom(svgRoot: SVGSVGElement) {
   svgRoot.querySelectorAll("defs g").forEach((g) => {
     g.setAttribute("fill", "none");
   });
+}
+
+/** A stretch was refused/rolled back: log the internal reason, surface a
+ *  generic (non-technical) warning to the user. Never leaks `reason` to the UI. */
+function notifyStretchFailed(reason: string) {
+  console.error("[ELF stretch]", reason);
+  useEditorStore.getState().setStretchWarning(
+    "Couldn't safely apply this change; the drawing was left unchanged."
+  );
 }
 
 /* ─── Structured Dimension Editor ─── */
@@ -498,11 +493,13 @@ export function SvgDrawingCanvas() {
     panY,
     originals,
     svgViewBox,
+    stretchWarning,
     select,
     setZoom,
     setPan,
     toggleLayer,
     setSvgViewBox,
+    setStretchWarning,
   } = useEditorStore();
 
   /* ─── Load SVG with direct color replacement ─── */
@@ -969,6 +966,9 @@ export function SvgDrawingCanvas() {
     const currentOriginals = store.originals;
     const currentComps = store.components;
 
+    // Clear any prior stretch warning before attempting a fresh apply.
+    useEditorStore.getState().setStretchWarning(null);
+
     // Hide SVG during undo→reapply to prevent visible flash.
     // The undo resets all transforms (200ms), creating a frame of un-stretched drawing.
     // visibility:hidden prevents paint until we're done re-applying.
@@ -981,7 +981,19 @@ export function SvgDrawingCanvas() {
 
     // Parse viewBox for bounds conversion
     const vbAttr = svgEl.getAttribute("viewBox")?.split(/\s+/).map(Number);
-    if (!vbAttr || vbAttr.length !== 4) return;
+    if (!vbAttr || vbAttr.length !== 4) {
+      // The SVG was hidden above; never leave the canvas blank-and-silent. Restore
+      // visibility and surface the generic warning instead of returning invisibly.
+      svgEl.style.visibility = "";
+      notifyStretchFailed("missing or malformed viewBox");
+      return;
+    }
+
+    const modelSpace = findModelSpace(svgEl);
+    const viewRegions = modelSpace ? computeViewRegions(modelSpace) : [];
+
+    const stretches: StretchParams[] = [];
+    const editedBlockIds = new Set<string>();
 
     for (const [compId, compOrig] of Object.entries(currentOriginals)) {
       const comp = currentComps[compId];
@@ -1030,26 +1042,141 @@ export function SvgDrawingCanvas() {
         }
 
         console.log(
-          `[ELF stretch] ${comp.name} ${dimKey}: ${origValue} → ${currentValue}`,
+          `[ELF stretch] queue ${comp.name} ${dimKey}: ${origValue} → ${currentValue}`,
           `dir=${dir} zone=[${dimBounds.min.toFixed(1)}, ${dimBounds.max.toFixed(1)}]`,
-          `delta=${delta.toFixed(1)} sectionSize=${sectionSize.toFixed(1)}`,
-          `svgBounds=`, svgBounds
+          `delta=${delta.toFixed(1)} sectionSize=${sectionSize.toFixed(1)}`
         );
 
-        applySvgStretch(svgEl, {
+        // Queue every changed dimension; they are composed together below, so a
+        // section can grow on both axes and several sections can grow at once.
+        let viewRegion: { xMin: number; xMax: number } | undefined;
+        if (dir === "horizontal" && viewRegions.length > 1) {
+          const dimX = (dimBounds.min + dimBounds.max) / 2; // width dim: dimBounds are X coords
+          viewRegion = viewOf(dimX, viewRegions) ?? undefined;
+        }
+        stretches.push({
           componentId: compId,
           svgBounds,
           direction: dir,
           delta,
+          viewRegion,
         });
+        editedBlockIds.add(blockId);
 
-        // Apply one stretch at a time for now
-        break;
+        // Keep the governing dim's number on the drawing in sync with the store.
+        // Inline edits write the SVG text directly; AI-cascade edits only update
+        // the store, so without this the governing number could stay stale.
+        setDimBlockText(svgEl, blockId, origValue, currentValue);
       }
     }
 
+    // Compose all queued stretches in a single pass (multi-dimension, multi-section).
+    // The engine is self-guarding: on any watchdog/invariant failure it rolls the
+    // geometry back to known-good and returns ok:false. Never leave a corrupt drawing.
+    const result = applyMultiStretch(svgEl, stretches);
+    if (!result.ok) {
+      undoStretches(svgEl);          // belt-and-suspenders: guarantee known-good geometry
+      postProcessSvgDom(svgEl);
+      svgEl.style.visibility = "";
+      notifyStretchFailed(result.reason ?? "unknown");
+      return;                         // do NOT re-value dims off a rolled-back geometry
+    }
+
+    // Re-value the spanning totals the stretch grew (e.g. overall 50'→54'); the
+    // governing dims are already set by the edit that triggered this pass.
+    revalueSpanningDims(svgEl, stretches, editedBlockIds);
+
     // Show SVG after all transforms are applied (prevents flash)
     svgEl.style.visibility = "";
+  }
+
+  /**
+   * Write a dimension block's number on the drawing from the store value,
+   * undo-safe. Records the true original in data-revalue-orig (which undoStretches
+   * restores) even when the text already matches, so an inline edit that wrote the
+   * number directly still reverts on undo.
+   */
+  function setDimBlockText(
+    svgEl: SVGSVGElement,
+    blockId: string,
+    originalValue: string,
+    newValue: string
+  ) {
+    const block = svgEl.querySelector(`[id="${CSS.escape(blockId)}"]`);
+    if (!block) return;
+    for (const textEl of block.querySelectorAll("text")) {
+      const cur = (textEl.textContent || "").trim();
+      if (!isDimensionText(cur)) continue;
+      if (!textEl.hasAttribute("data-revalue-orig")) {
+        textEl.setAttribute("data-revalue-orig", originalValue);
+      }
+      if (cur !== newValue) textEl.textContent = newValue;
+      return;
+    }
+  }
+
+  /**
+   * Re-value the dimensions whose measured span the stretch grew. Mirrors the
+   * lab's modify.mjs rule: a same-axis dimension is bumped by +delta only if it
+   * SPANS the stretched section (its measured range contains the stretch zone) —
+   * e.g. stretching the silencer grows the overall-height total. The governing
+   * (directly edited) dims already carry their new value and are skipped. Dims
+   * that merely clip a zone edge (typically an unrelated companion-elevation dim)
+   * are left alone, which is the sales-correct, conservative set.
+   *
+   * Only the SVG def text is written (the rendered drawing is the deliverable).
+   * undoStretches() restores it via the data-revalue-orig marker, so repeated
+   * passes and undo stay consistent and chained edits recompute from original.
+   */
+  function revalueSpanningDims(
+    svgEl: SVGSVGElement,
+    stretches: StretchParams[],
+    editedBlockIds: Set<string>
+  ) {
+    if (stretches.length === 0) return;
+
+    // Normalize each stretch to a Model_Space span along its axis.
+    const specs = stretches.map((s) =>
+      s.direction === "vertical"
+        ? { dir: "vertical" as const, lo: -s.svgBounds.bottom, hi: -s.svgBounds.top, delta: s.delta }
+        : { dir: "horizontal" as const, lo: s.svgBounds.left, hi: s.svgBounds.right, delta: s.delta }
+    );
+
+    const TOL = 6; // inches — matches the lab's spanning tolerance
+    const defBlocks = svgEl.querySelectorAll('[id^="*D"]');
+
+    for (const block of defBlocks) {
+      const blockId = block.getAttribute("id") || "";
+      if (!/^\*D\d+$/.test(blockId)) continue;
+      if (editedBlockIds.has(blockId)) continue; // governing dim already set by the edit
+
+      const dir =
+        getDimBlockDirection(blockId, svgEl) === "Height" ? "vertical" : "horizontal";
+      const bounds = getDimBlockBounds(svgEl, blockId, dir);
+      if (!bounds) continue;
+
+      // Sum the deltas of same-axis stretches this dimension fully spans.
+      let add = 0;
+      for (const sp of specs) {
+        if (sp.dir !== dir) continue;
+        if (bounds.min <= sp.lo + TOL && bounds.max >= sp.hi - TOL) add += sp.delta;
+      }
+      if (Math.abs(add) < 0.01) continue;
+
+      for (const textEl of block.querySelectorAll("text")) {
+        const cur = (textEl.textContent || "").trim();
+        if (!isDimensionText(cur)) continue;
+        const curInches = parseDimInches(cur);
+        if (curInches == null) break;
+        if (!textEl.hasAttribute("data-revalue-orig")) {
+          textEl.setAttribute("data-revalue-orig", cur);
+        }
+        const nv = formatDimInches(curInches + add);
+        textEl.textContent = nv;
+        console.log(`[ELF revalue] ${blockId} ${cur} → ${nv} (+${add.toFixed(1)} spanning)`);
+        break;
+      }
+    }
   }
 
   /* ─── Highlight modified dimensions in the SVG ─── */
@@ -1315,6 +1442,25 @@ export function SvgDrawingCanvas() {
         select(null);
       }}
     >
+      {/* Stretch-failure warning banner (drawing was rolled back, left unchanged) */}
+      {stretchWarning && (
+        <div
+          className="absolute top-3 left-1/2 -translate-x-1/2 z-30 flex items-center gap-3
+                     px-4 py-2 rounded-xl bg-amber-50 border border-amber-300
+                     text-amber-800 text-[12px] font-medium shadow-md"
+          role="alert"
+        >
+          <span>{stretchWarning}</span>
+          <button
+            onClick={() => setStretchWarning(null)}
+            aria-label="Dismiss warning"
+            className="text-amber-500 hover:text-amber-800 transition-colors leading-none text-[14px]"
+          >
+            {"✕"}
+          </button>
+        </div>
+      )}
+
       {/* SVG drawing + component overlays */}
       <div
         className="absolute top-1/2 left-1/2"

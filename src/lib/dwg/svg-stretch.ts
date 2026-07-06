@@ -25,6 +25,20 @@
  * After flip: internal Y ~11 (bottom) to ~1332 (top).
  */
 
+import { isAnnotationElement } from "./annotations";
+
+export interface StretchResult {
+  ok: boolean;
+  reason?: string;
+  transformed: number;
+}
+
+/** Safety budgets. The real drawing is ~75k elements and a stretch runs in ~1-2s. */
+const DEFAULT_MAX_ELEMENTS = 200_000;
+const DEFAULT_MAX_MS = 4_000;
+const MIN_SANE_SCALE = 0.02;
+const MAX_SANE_SCALE = 50;
+
 export interface StretchParams {
   /** Component ID this stretch applies to */
   componentId: string;
@@ -39,6 +53,8 @@ export interface StretchParams {
   direction: "vertical" | "horizontal";
   /** Amount to stretch in SVG units (positive = bigger) */
   delta: number;
+  /** Width stretches only: confine the stretch to this X-interval (the edited view). */
+  viewRegion?: { xMin: number; xMax: number };
 }
 
 /**
@@ -92,6 +108,15 @@ export function undoStretches(svgRoot: SVGSVGElement): void {
       text.removeAttribute("transform");
     }
     text.removeAttribute("data-stretch-text-orig");
+  }
+
+  // Restore re-valued dimension text (spanning totals) to their original values,
+  // so every stretch/undo cycle recomputes from the pristine number.
+  const revalued = svgRoot.querySelectorAll("[data-revalue-orig]");
+  for (const text of revalued) {
+    const orig = text.getAttribute("data-revalue-orig");
+    if (orig !== null) text.textContent = orig;
+    text.removeAttribute("data-revalue-orig");
   }
 
   // Restore original viewBox
@@ -276,6 +301,206 @@ export function applySvgStretch(
     `above=${classified.above} inZone=${classified.inZone} below=${classified.below} skipped=${classified.skipped}`,
     `delta=${delta.toFixed(1)} direction=${direction}`
   );
+}
+
+/**
+ * Apply MULTIPLE stretches in a single pass, COMPOSING each element's transform
+ * instead of overwriting it. applySvgStretch() does setAttribute("transform", …),
+ * so calling it per-dimension makes the last write win on any shared element —
+ * that is why the caller used to break after one dim. This composes instead.
+ *
+ * Each stretch acts on ONE axis and X/Y are independent, so an element's net
+ * transform is `translate(tx,ty) scale(sx,sy)`, accumulated over the stretches:
+ *   - after a zone (higher coord)  → translate by that stretch's delta
+ *   - inside a zone                → scale about the zone's near edge
+ *   - before a zone (lower coord)  → no effect
+ * fastPosition() reads geometry attributes (never the transform), so every zone
+ * classifies against ORIGINAL coords. That makes the result exact and
+ * order-independent for DISJOINT same-axis zones and for mixed-axis stretches.
+ * Overlapping/nested same-axis zones are ambiguous (the per-view spatial-scoping
+ * gap): the later of any overlapping same-axis pair is skipped with a warning
+ * rather than silently double-scaled.
+ */
+export function applyMultiStretch(
+  svgRoot: SVGSVGElement,
+  stretches: StretchParams[],
+  opts: { maxElements?: number; maxMs?: number } = {}
+): StretchResult {
+  const maxElements = opts.maxElements ?? DEFAULT_MAX_ELEMENTS;
+  const maxMs = opts.maxMs ?? DEFAULT_MAX_MS;
+
+  const active = stretches.filter((s) => Math.abs(s.delta) >= 0.01);
+  if (active.length === 0) return { ok: true, transformed: 0 };
+
+  const modelSpace = findModelSpace(svgRoot);
+  if (!modelSpace) {
+    console.warn("[ELF stretch] Could not find *Model_Space");
+    return { ok: false, reason: "no model space", transformed: 0 };
+  }
+
+  // Keep the RAW viewBox string for a self-contained rollback (independent of
+  // saveOriginalViewBox / data-original-viewbox), plus the parsed numbers.
+  const vbStr = svgRoot.getAttribute("viewBox");
+  const vb = vbStr?.split(/\s+/).map(Number);
+  if (!vb || vb.length !== 4 || vb.some((n) => !Number.isFinite(n)))
+    return { ok: false, reason: "bad viewBox", transformed: 0 };
+  const [vbX, vbY, vbW, vbH] = vb;
+
+  // Normalize each stretch to a 1D affine along its axis, in Model_Space coords.
+  // vertical: internal Y = -(viewBox Y) due to the matrix(1,0,0,-1) flip.
+  type Spec = { axis: "x" | "y"; near: number; far: number; scale: number; delta: number;
+                viewRegion?: { xMin: number; xMax: number } };
+  const specs: Spec[] = [];
+  for (const s of active) {
+    if (s.direction === "vertical") {
+      const far = -s.svgBounds.top;      // internal Y increases upward
+      const near = -s.svgBounds.bottom;  // near edge = scale origin
+      const h = far - near;
+      if (h <= 0) continue;
+      specs.push({ axis: "y", near, far, scale: (h + s.delta) / h, delta: s.delta, viewRegion: s.viewRegion });
+    } else {
+      const near = s.svgBounds.left;
+      const far = s.svgBounds.right;
+      const w = far - near;
+      if (w <= 0) continue;
+      specs.push({ axis: "x", near, far, scale: (w + s.delta) / w, delta: s.delta, viewRegion: s.viewRegion });
+    }
+  }
+
+  // Fail safe on overlapping same-axis zones (keep the first; warn on the rest).
+  const kept: Spec[] = [];
+  for (const sp of specs) {
+    const clash = kept.find(
+      (k) => k.axis === sp.axis && sp.near < k.far && sp.far > k.near
+    );
+    if (clash) {
+      console.warn(
+        `[ELF stretch] skipping overlapping ${sp.axis}-zone [${sp.near.toFixed(0)}, ${sp.far.toFixed(0)}] ` +
+          `(nested-zone spatial scoping not yet supported)`
+      );
+      continue;
+    }
+    kept.push(sp);
+  }
+  if (kept.length === 0) return { ok: true, transformed: 0 };
+
+  let sumV = 0, sumH = 0;
+  for (const sp of kept) {
+    if (sp.axis === "y") sumV += sp.delta;
+    else sumH += sp.delta;
+  }
+
+  const children = Array.from(modelSpace.children) as SVGGElement[];
+
+  // WATCHDOG (pre): element budget.
+  if (children.length > maxElements)
+    return { ok: false, reason: `element budget exceeded (${children.length} > ${maxElements})`, transformed: 0 };
+
+  // Self-contained rollback: restore geometry AND the original viewBox string, so the
+  // safety net does not depend on the caller having called saveOriginalViewBox.
+  const rollback = () => {
+    undoStretches(svgRoot);
+    if (vbStr) svgRoot.setAttribute("viewBox", vbStr);
+  };
+
+  const t0 = performance.now();
+  let transformed = 0;
+
+  for (let i = 0; i < children.length; i++) {
+    // WATCHDOG (mid): time budget.
+    if ((i & 8191) === 0 && performance.now() - t0 > maxMs) {
+      rollback();
+      return { ok: false, reason: `watchdog timeout after ${Math.round(performance.now() - t0)}ms`, transformed: 0 };
+    }
+    const child = children[i];
+    const pos = fastPosition(child);
+    if (!pos) continue;
+    const annotation = isAnnotationElement(child);
+
+    let sx = 1, sy = 1, tx = 0, ty = 0;
+    for (const sp of kept) {
+      // Width scoping: skip elements outside the edited view.
+      if (sp.viewRegion && (pos.x < sp.viewRegion.xMin || pos.x > sp.viewRegion.xMax)) continue;
+
+      const c = sp.axis === "y" ? pos.y : pos.x;
+      let t = 0, sc = 1;
+      if (c > sp.far) {
+        t = sp.delta;                         // past the zone: rigid shift (all element kinds)
+      } else if (c >= sp.near) {
+        if (annotation) {
+          t = 0;                              // in-zone annotation: hold position, NEVER scale
+        } else {
+          sc = sp.scale;                      // in-zone equipment: scale about the near edge
+          t = sp.near * (1 - sp.scale);
+        }
+      } else {
+        continue;                             // before the zone: untouched
+      }
+      if (sp.axis === "y") { sy *= sc; ty += t; }
+      else { sx *= sc; tx += t; }
+    }
+
+    if (sx !== 1 || sy !== 1 || tx !== 0 || ty !== 0) {
+      child.setAttribute("transform", `translate(${tx}, ${ty}) scale(${sx}, ${sy})`);
+      child.setAttribute("data-stretch-transform", "true");
+      transformed++;
+    }
+  }
+
+  // Grow the viewBox: top by summed vertical deltas, right by summed horizontal.
+  svgRoot.setAttribute(
+    "viewBox",
+    `${vbX} ${vbY - sumV} ${vbW + sumH} ${vbH + sumV}`
+  );
+
+  const elapsed = Math.round(performance.now() - t0);
+  console.log(
+    `[ELF stretch] ${kept.length} zone(s) composed over ${children.length} elements in ${elapsed}ms:`,
+    `transformed=${transformed} sumV=${sumV.toFixed(1)} sumH=${sumH.toFixed(1)}`
+  );
+
+  // INVARIANTS (post): if anything is off, roll back to the prior known-good geometry.
+  const invariantError = checkStretchInvariants(svgRoot, modelSpace, children.length, vb);
+  if (invariantError) {
+    rollback();
+    return { ok: false, reason: invariantError, transformed: 0 };
+  }
+  return { ok: true, transformed };
+}
+
+/** Returns an error string if any post-stretch invariant is violated, else null. */
+function checkStretchInvariants(
+  svgRoot: SVGSVGElement,
+  modelSpace: Element,
+  originalChildCount: number,
+  origVb: number[]
+): string | null {
+  if (modelSpace.children.length !== originalChildCount)
+    return `child count changed (${originalChildCount} -> ${modelSpace.children.length})`;
+
+  const transformedEls = modelSpace.querySelectorAll("[data-stretch-transform]");
+  for (const el of transformedEls) {
+    const t = el.getAttribute("transform") || "";
+    const tr = t.match(/translate\(\s*([-\d.eE]+)\s*,\s*([-\d.eE]+)\s*\)/);
+    const sc = t.match(/scale\(\s*([-\d.eE]+)\s*,\s*([-\d.eE]+)\s*\)/);
+    const nums = [tr?.[1], tr?.[2], sc?.[1], sc?.[2]].filter((v) => v != null).map(Number);
+    if (nums.some((n) => !Number.isFinite(n))) return "non-finite transform value";
+    if (sc) {
+      for (const s of [+sc[1], +sc[2]]) {
+        if (s === 1) continue;
+        // A non-positive scale mirrors or collapses the geometry — visually corrupt,
+        // and NOT caught by the viewBox-area check when a concurrent grow dominates.
+        if (s <= 0) return `non-positive (mirrored) scale (${s})`;
+        if (s < MIN_SANE_SCALE || s > MAX_SANE_SCALE) return `scale out of bounds (${s})`;
+      }
+    }
+  }
+
+  const vb = svgRoot.getAttribute("viewBox")?.split(/\s+/).map(Number);
+  if (!vb || vb.length !== 4 || vb.some((n) => !Number.isFinite(n))) return "viewBox became non-finite";
+  if (vb[2] * vb[3] < origVb[2] * origVb[3] - 1e-6) return "viewBox area shrank";
+
+  return null;
 }
 
 /* ─── Dimension Parsing ─── */
