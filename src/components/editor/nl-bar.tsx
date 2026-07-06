@@ -2,6 +2,7 @@
 
 import { useState, useRef } from "react";
 import { useEditorStore } from "@/stores/editor-store";
+import { validateDimValue } from "@/lib/dwg/svg-stretch";
 import { Zap, ArrowUp, Loader2, AlertTriangle, Info, ArrowRight } from "lucide-react";
 
 interface AIMessage {
@@ -100,27 +101,55 @@ export function NLBar() {
 
           case "updateDim":
             if (action.componentId && action.dimKey && action.value) {
-              updateDim(action.componentId, action.dimKey, action.value);
-            }
-            if (action.message)
+              const check = validateDimValue(action.value);
+              if (check.ok) {
+                updateDim(action.componentId, action.dimKey, action.value);
+                if (action.message)
+                  newMessages.push({ text: action.message, type: "success" });
+              } else {
+                newMessages.push({
+                  text: `Ignored invalid value "${action.value}" for ${action.dimKey} — left unchanged.`,
+                  type: "caution",
+                });
+              }
+            } else if (action.message) {
               newMessages.push({ text: action.message, type: "success" });
+            }
             break;
 
           case "cascade":
             // Apply the primary change
             if (action.componentId && action.dimKey && action.value) {
-              updateDim(action.componentId, action.dimKey, action.value);
-            }
-            if (action.message)
+              const check = validateDimValue(action.value);
+              if (check.ok) {
+                updateDim(action.componentId, action.dimKey, action.value);
+                if (action.message)
+                  newMessages.push({ text: action.message, type: "success" });
+              } else {
+                newMessages.push({
+                  text: `Ignored invalid value "${action.value}" for ${action.dimKey} — left unchanged.`,
+                  type: "caution",
+                });
+              }
+            } else if (action.message) {
               newMessages.push({ text: action.message, type: "success" });
+            }
             // Apply cascade effects
             if (action.cascadeEffects) {
               for (const effect of action.cascadeEffects) {
-                updateDim(effect.componentId, effect.dimKey, effect.value);
-                newMessages.push({
-                  text: `↳ ${effect.componentName}: ${effect.dimKey} → ${effect.value} (${effect.reason})`,
-                  type: "cascade",
-                });
+                const check = validateDimValue(effect.value);
+                if (check.ok) {
+                  updateDim(effect.componentId, effect.dimKey, effect.value);
+                  newMessages.push({
+                    text: `↳ ${effect.componentName}: ${effect.dimKey} → ${effect.value} (${effect.reason})`,
+                    type: "cascade",
+                  });
+                } else {
+                  newMessages.push({
+                    text: `↳ ${effect.componentName}: ignored invalid ${effect.dimKey} value "${effect.value}" — left unchanged.`,
+                    type: "caution",
+                  });
+                }
               }
             }
             break;

@@ -528,6 +528,46 @@ export function parseDimInches(s: string): number | null {
 }
 
 /**
+ * Upper sanity bound (inches) for a dimension value. This is a garbage-catcher
+ * for hallucinated/absurd values (e.g. a raw coordinate), NOT an engineering
+ * limit: ~8333 ft, far above any real SCR/CO system. Oversize-but-plausible
+ * values are already governed by the stretch safety net's scale cap.
+ */
+export const MAX_SANE_DIM_INCHES = 100_000;
+
+export interface DimValidation {
+  ok: boolean;
+  inches?: number;
+  reason?: string;
+}
+
+/**
+ * Validate a dimension value BEFORE it reaches the store / stretch engine.
+ * Rejects the zone-independent corruption sources so AI-cascade values that
+ * would collapse or garble the drawing are dropped at the source (the stretch
+ * safety net remains the backstop for zone-dependent mirror/collapse cases).
+ */
+export function validateDimValue(value: string): DimValidation {
+  if (typeof value !== "string" || value.trim() === "") {
+    return { ok: false, reason: "empty dimension value" };
+  }
+  const inches = parseDimInches(value);
+  if (inches === null) {
+    return { ok: false, reason: `unparseable dimension "${value}"` };
+  }
+  if (!Number.isFinite(inches)) {
+    return { ok: false, reason: `non-finite dimension "${value}"` };
+  }
+  if (inches <= 0) {
+    return { ok: false, reason: `non-positive dimension "${value}" (${inches}")` };
+  }
+  if (inches > MAX_SANE_DIM_INCHES) {
+    return { ok: false, reason: `implausibly large dimension "${value}" (${inches}")` };
+  }
+  return { ok: true, inches };
+}
+
+/**
  * Format decimal inches to engineering dimension string.
  */
 export function formatDimInches(totalInches: number): string {

@@ -11,6 +11,7 @@ import {
   saveOriginalViewBox,
   computeStretchDelta,
   findModelSpace,
+  validateDimValue,
 } from "@/lib/dwg/svg-stretch";
 import type { StretchParams } from "@/lib/dwg/svg-stretch";
 import { computeViewRegions, viewOf } from "@/lib/dwg/view-model";
@@ -773,7 +774,10 @@ export function SvgDrawingCanvas() {
       if (!res.ok) return;
       const data = await res.json();
 
-      // Apply cascade effects from AI response
+      // Apply cascade effects from AI response. Validate every AI-supplied value
+      // at the source: a non-positive / unparseable / garbage dimension would
+      // collapse or garble the drawing, so drop it here rather than lean on the
+      // stretch safety net to roll it back after the fact.
       for (const action of data.actions || []) {
         if (
           (action.action === "updateDim" || action.action === "cascade") &&
@@ -781,11 +785,21 @@ export function SvgDrawingCanvas() {
           action.dimKey &&
           action.value
         ) {
-          store.updateDim(action.componentId, action.dimKey, action.value);
+          const check = validateDimValue(action.value);
+          if (check.ok) {
+            store.updateDim(action.componentId, action.dimKey, action.value);
+          } else {
+            console.warn(`[ELF] AI cascade rejected value: ${check.reason}`);
+          }
         }
         if (action.cascadeEffects) {
           for (const effect of action.cascadeEffects) {
-            store.updateDim(effect.componentId, effect.dimKey, effect.value);
+            const check = validateDimValue(effect.value);
+            if (check.ok) {
+              store.updateDim(effect.componentId, effect.dimKey, effect.value);
+            } else {
+              console.warn(`[ELF] AI cascade rejected value: ${check.reason}`);
+            }
           }
         }
       }
