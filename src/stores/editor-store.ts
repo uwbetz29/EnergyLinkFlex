@@ -224,6 +224,10 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     const { components, originals } = get();
     const comp = components[compId];
     if (!comp) return;
+    // Ignore updates to a dim the component doesn't have — the AI cascade can
+    // return a phantom dimKey, which would otherwise record `undefined` as the
+    // "original" and crash the change-info/stretch paths (parseDimInches).
+    if (!(dimKey in comp.dims)) return;
 
     // Truncate redo history and add new entry
     const prevValue = comp.dims[dimKey];

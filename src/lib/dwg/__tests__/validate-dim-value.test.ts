@@ -1,5 +1,12 @@
 import { describe, it, expect } from "vitest";
-import { validateDimValue } from "../svg-stretch";
+import { validateDimValue, parseDimInches } from "../svg-stretch";
+
+describe("parseDimInches defensive input", () => {
+  it("returns null for undefined/null (cascade & change-info paths pass these)", () => {
+    expect(parseDimInches(undefined as unknown as string)).toBeNull();
+    expect(parseDimInches(null as unknown as string)).toBeNull();
+  });
+});
 
 describe("validateDimValue", () => {
   it("accepts a normal engineering dimension and returns its inches", () => {

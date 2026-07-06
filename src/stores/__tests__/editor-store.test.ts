@@ -26,6 +26,24 @@ describe("Editor Store — DWG support", () => {
     });
   });
 
+  describe("updateDim guards", () => {
+    it("ignores an update to a dim the component does not have (AI phantom dimKey)", () => {
+      useEditorStore.setState({
+        components: {
+          c1: { id: "c1", name: "Silencer", type: "flow", dims: { Height: "10'-0\"" } } as unknown as never,
+        },
+      });
+      useEditorStore.getState().updateDim("c1", "Bogus Dim", "99'-0\"");
+      const s = useEditorStore.getState();
+      expect(s.changeCount).toBe(0);
+      expect(s.originals.c1).toBeUndefined();
+      expect((s.components.c1 as { dims: Record<string, string> }).dims["Bogus Dim"]).toBeUndefined();
+      // a real dim on the same component still updates
+      useEditorStore.getState().updateDim("c1", "Height", "12'-0\"");
+      expect((useEditorStore.getState().components.c1 as { dims: Record<string, string> }).dims.Height).toBe("12'-0\"");
+    });
+  });
+
   describe("setDrawingType", () => {
     it("sets drawing type to dwg", () => {
       useEditorStore.getState().setDrawingType("dwg");

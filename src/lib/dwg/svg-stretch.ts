@@ -305,6 +305,43 @@ export function applySvgStretch(
 }
 
 /**
+ * Caller policy for nested edits: convert each container spec's delta to its
+ * RESIDUAL before it reaches applyMultiStretch. When a salesperson edits a
+ * spanning total (e.g. overall 50'->54', +48) AND a component inside it (silencer
+ * 8'->10', +24) in the same pass, the engine's redistribute contract expects the
+ * container to carry only the growth NOT already produced by its children
+ * (48 - 24 = 24). Without this, the container's full delta is distributed across
+ * the gaps ON TOP of the child growth and the total overshoots (54' -> 56').
+ *
+ * A residual subtracts only IMMEDIATE same-axis children (the smallest containing
+ * spec is each child's parent), so arbitrary nesting depth stays consistent:
+ * total growth of a region equals the outermost spec's edited delta. Disjoint
+ * specs (the common component-only edit) are returned unchanged.
+ */
+export function resolveContainerResiduals(stretches: StretchParams[]): StretchParams[] {
+  const interval = (s: StretchParams) =>
+    s.direction === "vertical"
+      ? { near: -s.svgBounds.bottom, far: -s.svgBounds.top }
+      : { near: s.svgBounds.left, far: s.svgBounds.right };
+  const strictlyContains = (a: StretchParams, b: StretchParams) => {
+    if (a === b || a.direction !== b.direction) return false;
+    const ai = interval(a), bi = interval(b);
+    const aInB = bi.near <= ai.near + AXIS_TOL && bi.far >= ai.far - AXIS_TOL;
+    const bInA = ai.near <= bi.near + AXIS_TOL && ai.far >= bi.far - AXIS_TOL;
+    return bInA && !aInB; // a contains b, and not coincident
+  };
+  const isImmediateChild = (parent: StretchParams, child: StretchParams) =>
+    strictlyContains(parent, child) &&
+    !stretches.some((mid) => mid !== parent && mid !== child && strictlyContains(parent, mid) && strictlyContains(mid, child));
+
+  return stretches.map((s) => {
+    let childSum = 0;
+    for (const o of stretches) if (isImmediateChild(s, o)) childSum += o.delta;
+    return childSum !== 0 ? { ...s, delta: s.delta - childSum } : s;
+  });
+}
+
+/**
  * Apply MULTIPLE stretches in a single pass, COMPOSING each element's transform
  * instead of overwriting it. applySvgStretch() does setAttribute("transform", …),
  * so calling it per-dimension makes the last write win on any shared element —
@@ -569,6 +606,7 @@ function checkStretchInvariants(
  * Handles: 10'-10 7/8", 15'-0 1/8", ~25'-0", 2'-10 7/8", 9'-8 3/4"
  */
 export function parseDimInches(s: string): number | null {
+  if (typeof s !== "string") return null; // defensive: cascade/display paths can pass undefined
   const clean = s.replace(/^[~Ø]/, "").trim().replace(/[""\u2033]$/, "");
 
   const m = clean.match(/(\d+)['\u2018\u2032][- ]?(\d+)?(?:\s+(\d+)\/(\d+))?/);

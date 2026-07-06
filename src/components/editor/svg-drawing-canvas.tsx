@@ -7,6 +7,7 @@ import {
   formatDimInches,
   dimKeyToDirection,
   applyMultiStretch,
+  resolveContainerResiduals,
   undoStretches,
   saveOriginalViewBox,
   computeStretchDelta,
@@ -1084,10 +1085,17 @@ export function SvgDrawingCanvas() {
       }
     }
 
+    // A simultaneous total+component edit (e.g. overall 50'→54' AND silencer
+    // 8'→10') nests: convert each container's delta to its residual so the growth
+    // its children already produce isn't double-counted (else the total overshoots,
+    // and the same double-count would hit the spanning re-value below). Disjoint
+    // component-only edits (the common case) pass through unchanged.
+    const resolved = resolveContainerResiduals(stretches);
+
     // Compose all queued stretches in a single pass (multi-dimension, multi-section).
     // The engine is self-guarding: on any watchdog/invariant failure it rolls the
     // geometry back to known-good and returns ok:false. Never leave a corrupt drawing.
-    const result = applyMultiStretch(svgEl, stretches);
+    const result = applyMultiStretch(svgEl, resolved);
     if (!result.ok) {
       undoStretches(svgEl);          // belt-and-suspenders: guarantee known-good geometry
       postProcessSvgDom(svgEl);
@@ -1097,8 +1105,10 @@ export function SvgDrawingCanvas() {
     }
 
     // Re-value the spanning totals the stretch grew (e.g. overall 50'→54'); the
-    // governing dims are already set by the edit that triggered this pass.
-    revalueSpanningDims(svgEl, stretches, editedBlockIds);
+    // governing dims are already set by the edit that triggered this pass. Uses the
+    // SAME resolved deltas as the geometry so a dim spanning both overall+component
+    // adds the true growth, not the double-counted sum.
+    revalueSpanningDims(svgEl, resolved, editedBlockIds);
 
     // Show SVG after all transforms are applied (prevents flash)
     svgEl.style.visibility = "";

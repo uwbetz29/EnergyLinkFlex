@@ -16,7 +16,7 @@ const LAB = process.env.ELF_LAB || "/Users/mike/dev/elf-lab";
 const { DOMParser } = await import(`${LAB}/node_modules/linkedom/esm/index.js`);
 
 const APP = "/Users/mike/dev/EnergyLinkFlex/src/lib/dwg";
-const { applyMultiStretch, undoStretches, saveOriginalViewBox, findModelSpace, fastPosition } = await import(`${APP}/svg-stretch.ts`);
+const { applyMultiStretch, resolveContainerResiduals, undoStretches, saveOriginalViewBox, findModelSpace, fastPosition } = await import(`${APP}/svg-stretch.ts`);
 const { isAnnotationElement } = await import(`${APP}/annotations.ts`);
 
 const SVG_PATH = "/Users/mike/dev/elf-lab/24081-CS1-0001_Sheet_2.svg";
@@ -80,6 +80,31 @@ const near = (a, b, tol = 1e-3) => Math.abs(a - b) < tol;
   // viewBox top grew by exactly the true geometric top shift (+48).
   const h1 = svg.getAttribute("viewBox").split(/\s+/).map(Number)[3];
   check(near(h1 - h0, 48, 1e-3), `viewBox height grew by 48 (${h0.toFixed(2)} -> ${h1.toFixed(2)})`);
+}
+
+// ── Caller policy: a simultaneous total+component edit (FULL deltas) resolves to
+//    residuals so the total grows by the edited amount, not the double-counted sum ──
+{
+  const svg = load();
+  const h0 = svg.getAttribute("viewBox").split(/\s+/).map(Number)[3];
+  // App passes each edited dim with its FULL delta: overall +48 AND silencer +24.
+  const full = [
+    { componentId: "sil", direction: "vertical", delta: 24, svgBounds: { ...SILENCER, ...FULLW } },
+    { componentId: "overall", direction: "vertical", delta: 48, svgBounds: { ...CONTAINER, ...FULLW } },
+  ];
+  const resolved = resolveContainerResiduals(full);
+  // overall's residual = 48 - 24 = 24; silencer unchanged.
+  const overallDelta = resolved.find((s) => s.componentId === "overall").delta;
+  check(near(overallDelta, 24, 1e-6), `container delta resolved to residual 24 (got ${overallDelta})`);
+  const res = applyMultiStretch(svg, resolved);
+  check(res.ok === true, `resolved nested edit returns ok:true`);
+  const h1 = svg.getAttribute("viewBox").split(/\s+/).map(Number)[3];
+  // total grows by 48 (the edited overall), NOT 72 (the double-counted 48+24).
+  check(near(h1 - h0, 48, 1e-3), `total grew 48 not 72 — no double-count (${(h1 - h0).toFixed(2)})`);
+  // silencer still scales 1.25 (its own +24 over 96).
+  const kids = Array.from(findModelSpace(svg).children);
+  const silEq = kids.filter((k) => { const p = fastPosition(k); return p && p.y > 550 && p.y < 610; });
+  check(silEq.length > 0 && silEq.every((k) => near(syOf(k), (96 + 24) / 96)), `silencer scales 1.25 under resolved edit (n=${silEq.length})`);
 }
 
 // ── Undo restores geometry + viewBox with zero leftover markers ──

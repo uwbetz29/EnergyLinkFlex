@@ -9,7 +9,7 @@
 // assertion to make it pass — fix the engine. The new nested cases fail against the
 // pre-nesting engine (which skips overlapping zones); that is the intended RED.
 import { describe, it, expect, vi } from "vitest";
-import { applyMultiStretch, findModelSpace, fastPosition, type StretchParams } from "../svg-stretch";
+import { applyMultiStretch, findModelSpace, fastPosition, resolveContainerResiduals, type StretchParams } from "../svg-stretch";
 import { makeNestedStackSvg } from "./fixtures";
 
 const parse = (s: string) =>
@@ -156,6 +156,49 @@ describe("nested-zone stretch — edge cases", () => {
     // a point inside the merged span scales by (600 + 48)/600 (summed delta 12+36)
     expect(parseTf(tf(eqAtY(kids, 580))).sy).toBeCloseTo((600 + 48) / 600, 6);
     expect(vbOf(svg)[3] - 1000).toBeCloseTo(48, 4);
+  });
+});
+
+describe("resolveContainerResiduals (caller policy: nested-edit deltas)", () => {
+  // vertical spec by internal interval [near, far]
+  const v = (componentId: string, near: number, far: number, delta: number): StretchParams =>
+    ({ componentId, direction: "vertical", delta, svgBounds: { top: -far, bottom: -near, left: 0, right: 200 } });
+  const deltaOf = (out: StretchParams[], id: string) => out.find((s) => s.componentId === id)!.delta;
+
+  it("leaves disjoint specs unchanged (the common component-only edit case)", () => {
+    const out = resolveContainerResiduals([v("a", 200, 300, 10), v("b", 400, 500, 20)]);
+    expect(deltaOf(out, "a")).toBe(10);
+    expect(deltaOf(out, "b")).toBe(20);
+  });
+
+  it("converts a container's delta to its residual over one nested child", () => {
+    // overall 50'->54' (+48) contains silencer 8'->10' (+24): residual = 48 - 24 = 24
+    const out = resolveContainerResiduals([v("overall", 291.5, 891.5, 48), v("sil", 531.3, 627.3, 24)]);
+    expect(deltaOf(out, "overall")).toBeCloseTo(24, 6);
+    expect(deltaOf(out, "sil")).toBe(24); // child unchanged
+  });
+
+  it("subtracts the sum of multiple immediate children", () => {
+    const out = resolveContainerResiduals([v("box", 0, 1000, 50), v("c1", 100, 200, 10), v("c2", 800, 900, 15)]);
+    expect(deltaOf(out, "box")).toBeCloseTo(25, 6); // 50 - (10 + 15)
+    expect(deltaOf(out, "c1")).toBe(10);
+    expect(deltaOf(out, "c2")).toBe(15);
+  });
+
+  it("subtracts only IMMEDIATE children through 3 levels", () => {
+    // A ⊇ B ⊇ C : A residual excludes only B (its immediate child), not C
+    const out = resolveContainerResiduals([v("A", 0, 900, 30), v("B", 200, 700, 20), v("C", 300, 500, 10)]);
+    expect(deltaOf(out, "A")).toBeCloseTo(10, 6); // 30 - 20
+    expect(deltaOf(out, "B")).toBeCloseTo(10, 6); // 20 - 10
+    expect(deltaOf(out, "C")).toBe(10);
+    // total growth across the region = A_res + B_res + C = 10+10+10 = 30 = the overall edit
+  });
+
+  it("does not mix axes (a horizontal spec never a child of a vertical container)", () => {
+    const horiz: StretchParams = { componentId: "h", direction: "horizontal", delta: 12, svgBounds: { top: -1000, bottom: 0, left: 400, right: 600 } };
+    const out = resolveContainerResiduals([v("V", 0, 1000, 40), horiz]);
+    expect(deltaOf(out, "V")).toBe(40); // horizontal spec is not subtracted from a vertical container
+    expect(deltaOf(out, "h")).toBe(12);
   });
 });
 
