@@ -1,7 +1,7 @@
 import { generateText } from "ai";
 import { NextResponse } from "next/server";
 import { auth } from "@/auth";
-import { SCR_SYSTEM_KNOWLEDGE } from "@/lib/ai/scr-knowledge";
+import { SCR_SYSTEM_KNOWLEDGE, THINKING_MODEL } from "@/lib/ai/scr-knowledge";
 
 export const maxDuration = 60;
 
@@ -151,10 +151,9 @@ Respond with a JSON object containing an "actions" array. Each action has a type
 
   try {
     const result = await generateText({
-      model: "anthropic/claude-sonnet-4.6" as any,
+      model: THINKING_MODEL as any,
       system: systemPrompt,
       prompt: instruction,
-      temperature: 0.3, // Lower temperature for precise engineering work
     });
 
     const text = result.text.trim();

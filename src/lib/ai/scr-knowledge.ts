@@ -3,6 +3,17 @@
  * Used by both the modify endpoint and the identify-component endpoint.
  */
 
+/**
+ * The "thinking layer" model — does the hard reasoning (section identification,
+ * engineering cascade). Deterministic code executes the mechanical result
+ * (svg-stretch.ts). AI Gateway slug format uses dots for the version.
+ *
+ * Upgraded 2026-07-05: claude-sonnet-4.6 -> claude-opus-4.8. Escalate to
+ * "anthropic/claude-fable-5" if Opus reasoning is still insufficient.
+ * NOTE: Opus 4.8 / Fable 5 REJECT `temperature` (400). Do not pass it.
+ */
+export const THINKING_MODEL = "anthropic/claude-opus-4.8";
+
 export const SCR_SYSTEM_KNOWLEDGE = `## SCR/CO Catalyst System Engineering Knowledge
 
 ### System Architecture (gas flow order, upstream → downstream)

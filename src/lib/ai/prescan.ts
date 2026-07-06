@@ -11,7 +11,7 @@
  */
 
 import { generateText } from "ai";
-import { SCR_SYSTEM_KNOWLEDGE } from "./scr-knowledge";
+import { SCR_SYSTEM_KNOWLEDGE, THINKING_MODEL } from "./scr-knowledge";
 import type {
   DwgComponent,
   DwgDimension,
@@ -43,7 +43,7 @@ export interface AiSection {
 
 export interface PreScanResult {
   sections: AiSection[];
-  /** AI's confidence in the overall identification (0-1) */
+  /** AI's confidence in the overall identification (0 to 1) */
   confidence: number;
   /** Summary of what the AI found */
   summary: string;
@@ -62,14 +62,20 @@ export interface PreScanInput {
 /** Lightweight info about a *D## dimension block extracted from SVG */
 export interface DimBlockInfo {
   blockId: string;
-  /** Formatted dimension text (e.g., "15'-0 1/8\"") */
+  /** Formatted dimension value text (e.g., "15'-0 1/8\"") */
   text: string;
-  /** Position of the <use> element in viewBox coordinates */
+  /** Embedded section label from the block's 2nd <text> (e.g., "SILENCER"), if any */
+  label: string | null;
+  /** Parsed measurement in inches (1 SVG unit = 1 inch), or null if unparseable */
+  valueInches: number | null;
+  /** Text-anchor position in Model_Space coords (the measurement center) */
   position: { x: number; y: number };
-  /** Extension line bounds */
-  extensionBounds: { min: number; max: number };
-  /** "Height" or "Width" based on extension line orientation */
+  /** Stretch zone = the measured range along the axis (text-center ± value/2) */
+  zone: { min: number; max: number };
+  /** "Height" or "Width" from the block's bounding-box aspect */
   direction: "Height" | "Width";
+  /** true when real witness-line endpoints sit at both zone ends */
+  witnessConfirmed: boolean;
 }
 
 /* ─── Color palette for AI-identified sections ─── */
@@ -100,100 +106,114 @@ const TYPE_ICONS: Record<string, string> = {
 
 /* ─── SVG Dimension Block Extraction ─── */
 
+/** Matches a feet-inch dimension value, optional diameter (U+00D8) or ~ prefix. */
+const DIM_TEXT_RE = /^[Ø~]?\d+['‘′]\s*-?\s*\d+(?:\s+\d+\/\d+)?["”″]?$/;
+
+/** Parse a feet-inch string ("8'-0\"", diameter 9'-0", "15'-0 1/8\"") to inches. */
+function parseInches(s: string): number | null {
+  const c = s.replace(/^[Ø~]/, "").trim();
+  const m = c.match(/(\d+)['‘′][- ]?(\d+)?(?:\s+(\d+)\/(\d+))?/);
+  if (m) {
+    const ft = +m[1], inch = +(m[2] || 0), n = +(m[3] || 0), d = +(m[4] || 1);
+    return ft * 12 + inch + (d ? n / d : 0);
+  }
+  const n = parseFloat(c);
+  return isNaN(n) ? null : n;
+}
+
 /**
- * Extract dimension block metadata from the SVG string.
- * Parses *D## block definitions to find dimension text, positions,
- * and extension line bounds — WITHOUT creating a DOM (runs server-side).
+ * Return the index just past the balanced </g> that closes the <g> opening at
+ * `open`. LibreDWG nests <g> children (witness lines + text sub-groups) inside
+ * each *D## block, so a non-greedy `[\s\S]*?</g>` regex stops at the FIRST nested
+ * </g> -- the bug that made the old extractor return 0 dimensions. This counts depth.
+ */
+function balancedGroupEnd(s: string, open: number): number {
+  let i = open + 2, depth = 1;
+  while (i < s.length && depth > 0) {
+    const o = s.indexOf("<g", i);
+    const c = s.indexOf("</g>", i);
+    if (c === -1) break;
+    if (o !== -1 && o < c) { depth++; i = o + 2; }
+    else { depth--; i = c + 4; }
+  }
+  return i;
+}
+
+/**
+ * Extract dimension block metadata from the SVG string using balanced-tag
+ * matching (no DOM -- runs server-side). Per *D## block it captures:
+ *  - text        : the feet-inch value (e.g. "8'-0\"")
+ *  - label       : the section name the drawing embedded (2nd <text>, e.g. "SILENCER")
+ *  - valueInches : parsed numeric inches (1 SVG unit = 1 inch)
+ *  - direction   : Height / Width from the bounding-box aspect
+ *  - zone        : the exact measured range along the axis (text-center +/- value/2),
+ *                  which matches the witness lines (proven in the offline lab)
+ * Coords are Model_Space (Y-up, 1 unit = 1 inch); the block's line coords are
+ * already absolute, so no <use>-offset correction is needed.
  */
 export function extractDimBlocksFromSvg(svg: string): DimBlockInfo[] {
   const results: DimBlockInfo[] = [];
+  const idRe = /<g\s+id="(\*D\d+)"[^>]*>/g;
+  let m: RegExpExecArray | null;
 
-  // Match dimension text pattern: 15'-0 1/8", 9'-8 3/4", etc.
-  const dimTextRe = /^[\u00d8~]?(\d+)['\u2018\u2032]\s*-?\s*(\d+)(?:\s+(\d+\/\d+))?["\u201d\u2033]?$/;
+  while ((m = idRe.exec(svg)) !== null) {
+    const blockId = m[1];
+    const content = svg.slice(m.index, balancedGroupEnd(svg, m.index));
 
-  // Find all <use> elements referencing *D## blocks
-  const useRe = /<use[^>]*href="#(\*D\d+)"[^>]*(?:x="([^"]*)")?[^>]*(?:y="([^"]*)")?[^>]*\/?>/g;
-  let useMatch;
-  const usePositions = new Map<string, { x: number; y: number }>();
+    // Text children (strip any nested markup), split into value vs. label.
+    const texts = [...content.matchAll(/<text\b[^>]*>([\s\S]*?)<\/text>/g)]
+      .map((t) => t[1].replace(/<[^>]+>/g, "").trim())
+      .filter(Boolean);
+    const text = texts.find((t) => DIM_TEXT_RE.test(t)) || "";
+    const label = texts.find((t) => !DIM_TEXT_RE.test(t)) || null;
+    if (!text) continue;
 
-  while ((useMatch = useRe.exec(svg)) !== null) {
-    const blockId = useMatch[1];
-    const x = parseFloat(useMatch[2] || "0");
-    const y = parseFloat(useMatch[3] || "0");
-    if (!isNaN(x) && !isNaN(y)) {
-      usePositions.set(blockId, { x, y });
+    // The value text is anchored at the measurement center (text-anchor:middle).
+    const tp = content.match(/<text[^>]*\bx="([^"]*)"[^>]*\by="([^"]*)"/);
+    const position = tp
+      ? { x: +(+tp[1]).toFixed(1), y: +(+tp[2]).toFixed(1) }
+      : { x: 0, y: 0 };
+
+    const lines = [...content.matchAll(
+      /<line[^>]*x1="([^"]*)"[^>]*y1="([^"]*)"[^>]*x2="([^"]*)"[^>]*y2="([^"]*)"/g
+    )].map((l) => ({ x1: +l[1], y1: +l[2], x2: +l[3], y2: +l[4] }));
+    if (!lines.length) continue;
+
+    let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+    for (const l of lines) {
+      minX = Math.min(minX, l.x1, l.x2); maxX = Math.max(maxX, l.x1, l.x2);
+      minY = Math.min(minY, l.y1, l.y2); maxY = Math.max(maxY, l.y1, l.y2);
     }
-  }
+    const direction: "Height" | "Width" =
+      (maxX - minX) >= (maxY - minY) ? "Width" : "Height";
+    const valueInches = parseInches(text);
 
-  // Find all *D## block definitions in <defs>
-  // LibreDWG outputs: <g id="*D16"> ... <text>15'-0 1/8"</text> ... <line .../> ... </g>
-  const blockRe = /<g\s+id="(\*D\d+)"[^>]*>([\s\S]*?)<\/g>/g;
-  let blockMatch;
+    // Zone = the measured range. Text is anchored at the measurement center, so
+    // zone = center +/- value/2 (matches the witness lines exactly; the dim line
+    // itself is drawn inset). Fall back to the raw bbox extent when unparseable.
+    const half = valueInches != null ? valueInches / 2 : 0;
+    const center = direction === "Width" ? position.x : position.y;
+    const zone = valueInches != null
+      ? { min: +(center - half).toFixed(1), max: +(center + half).toFixed(1) }
+      : direction === "Width"
+        ? { min: minX, max: maxX }
+        : { min: minY, max: maxY };
 
-  while ((blockMatch = blockRe.exec(svg)) !== null) {
-    const blockId = blockMatch[1];
-    const blockContent = blockMatch[2];
-
-    // Find dimension text
-    const textRe = /<text[^>]*>(.*?)<\/text>/g;
-    let textMatch;
-    let dimText = "";
-    while ((textMatch = textRe.exec(blockContent)) !== null) {
-      const content = textMatch[1].trim();
-      if (dimTextRe.test(content)) {
-        dimText = content;
-        break;
-      }
-    }
-    if (!dimText) continue;
-
-    // Find extension lines and determine direction
-    const lineRe = /<line[^>]*x1="([^"]*)"[^>]*y1="([^"]*)"[^>]*x2="([^"]*)"[^>]*y2="([^"]*)"[^>]*\/?>/g;
-    let lineMatch;
-    const lines: { x1: number; y1: number; x2: number; y2: number }[] = [];
-
-    while ((lineMatch = lineRe.exec(blockContent)) !== null) {
-      lines.push({
-        x1: parseFloat(lineMatch[1]),
-        y1: parseFloat(lineMatch[2]),
-        x2: parseFloat(lineMatch[3]),
-        y2: parseFloat(lineMatch[4]),
-      });
-    }
-
-    if (lines.length === 0) continue;
-
-    // Determine direction from the last line (the dimension line)
-    const dimLine = lines[lines.length - 1];
-    const dx = Math.abs(dimLine.x2 - dimLine.x1);
-    const dy = Math.abs(dimLine.y2 - dimLine.y1);
-    const direction: "Height" | "Width" = dy > dx ? "Height" : "Width";
-
-    // Compute extension bounds (offset by <use> position)
-    const usePos = usePositions.get(blockId);
-    const offsetX = usePos?.x ?? 0;
-    const offsetY = usePos?.y ?? 0;
-
-    let min = Infinity;
-    let max = -Infinity;
-    for (const line of lines) {
-      if (direction === "Height") {
-        min = Math.min(min, line.y1 + offsetY, line.y2 + offsetY);
-        max = Math.max(max, line.y1 + offsetY, line.y2 + offsetY);
-      } else {
-        min = Math.min(min, line.x1 + offsetX, line.x2 + offsetX);
-        max = Math.max(max, line.x1 + offsetX, line.x2 + offsetX);
-      }
-    }
-
-    if (!isFinite(min) || !isFinite(max)) continue;
+    // Confidence: a real witness-line endpoint sits at each zone end.
+    const near = (v: number) => lines.some((l) =>
+      direction === "Width"
+        ? Math.abs(l.x1 - v) < 3 || Math.abs(l.x2 - v) < 3
+        : Math.abs(l.y1 - v) < 3 || Math.abs(l.y2 - v) < 3);
 
     results.push({
       blockId,
-      text: dimText,
-      position: usePos ?? { x: 0, y: 0 },
-      extensionBounds: { min, max },
+      text,
+      label,
+      valueInches,
+      position,
+      zone,
       direction,
+      witnessConfirmed: near(zone.min) && near(zone.max),
     });
   }
 
@@ -207,8 +227,31 @@ export async function performPreScan(input: PreScanInput): Promise<PreScanResult
 
   // Build context strings
   const dimSummary = dimBlockInfo
-    .map((d) => `  ${d.blockId}: "${d.text}" (${d.direction}) at pos=(${d.position.x.toFixed(1)}, ${d.position.y.toFixed(1)}) ext=[${d.extensionBounds.min.toFixed(1)}, ${d.extensionBounds.max.toFixed(1)}]`)
+    .map((d) => {
+      const inches = d.valueInches != null ? ` = ${d.valueInches}in` : "";
+      const lbl = d.label ? ` label="${d.label}"` : "";
+      const approx = d.witnessConfirmed ? "" : " (zone approx)";
+      return `  ${d.blockId}: "${d.text}"${inches} (${d.direction}) zone=[${d.zone.min.toFixed(1)}, ${d.zone.max.toFixed(1)}]${lbl}${approx}`;
+    })
     .join("\n");
+
+  // Native DIMENSION entities: authoritative measured values (inches). Their text
+  // is a "<>" placeholder (no embedded label) and they carry no usable position,
+  // so they act as a completeness/accuracy cross-check for the SVG blocks above.
+  const nativeInches = dimensions
+    .map((d) => d.measurement)
+    .filter((n) => typeof n === "number" && n > 0)
+    .sort((a, b) => a - b);
+  const svgInches = dimBlockInfo
+    .map((d) => d.valueInches)
+    .filter((n): n is number => n != null);
+  const matchedNative = nativeInches.filter((n) =>
+    svgInches.some((s) => Math.abs(s - n) < 0.6)
+  ).length;
+  const nativeDimSummary = nativeInches.length
+    ? `${dimensions.length} entities; values (in): ${nativeInches.map((n) => +n.toFixed(2)).join(", ")}\n` +
+      `  (${matchedNative}/${nativeInches.length} match a labeled block above; DIMENSION positions are unavailable)`
+    : "None.";
 
   const compSummary = components
     .slice(0, 40)
@@ -239,26 +282,31 @@ ${drawingInfo}
 ${entityInfo}
 ${vbInfo}
 
-### Dimension Blocks (SVG *D## blocks with measured values)
+### Labeled Dimension Blocks (from the SVG: geometry + the drawing's own labels)
+Format: blockId: "value" = inches (direction) zone=[min, max] label="...". A zone is
+the exact measured range along the axis in Model_Space units (1 unit = 1 inch).
+"zone approx" means the witness lines did not confirm both ends; trust it a little less.
 ${dimSummary || "No dimension blocks found."}
 
-### Extracted Components (DWG block inserts)
+### Native Dimensions (authoritative measured values from DWG DIMENSION entities)
+${nativeDimSummary}
+
+### Extracted Components (DWG block inserts: internal parts with positions)
 ${compSummary || "No components found."}
 
-## Coordinate System Notes
-- The SVG uses a Y-flip matrix: internal Y = -viewBox Y
-- viewBox minY is negative (top of drawing), minY + height ≈ 0 (bottom)
-- Dimension positions are in Model_Space coords (Y-up)
-- Extension bounds define the exact stretch zone for each dimension
+## Coordinate System
+- 1 SVG unit = 1 inch. Zones/positions above are Model_Space (Y-up); the ground is ~y 291.5.
+- Several blocks embed the section's own label (e.g. SILENCER=8'-0", 4000 STACK=50'-0",
+  INSIDE LINER=Ø9'-0", GAS PATH, GRATING). Treat those as fixed anchors; do NOT rename them.
+- Infer the remaining sections from the component inserts' names/positions + gas-flow order.
 
-## How to Compute Bounding Boxes
-For each section, estimate a bounding box as percentages of the viewBox:
-- left% = ((sectionLeft - viewBox.minX) / viewBox.width) * 100
-- top% = ((sectionTop - viewBox.minY) / viewBox.height) * 100
-- width% and height% similarly
-Use the dimension block positions and extension bounds to estimate the section's spatial extent.
-For dimensions spanning a section vertically, the extension bounds give you the Y range.
-For dimensions spanning horizontally, they give the X range.
+## How to Compute Bounding Boxes (box = [left%, top%, width%, height%] of the viewBox)
+X maps directly to the viewBox; Y is flipped (viewBox Y = -Model_Space Y). So for a zone:
+- Height section: top% = (-zone.max - viewBox.minY) / viewBox.height * 100,
+  height% = (zone.max - zone.min) / viewBox.height * 100
+- Width section: left% = (zone.min - viewBox.minX) / viewBox.width * 100,
+  width% = (zone.max - zone.min) / viewBox.width * 100
+Union the zones of a section's dimensions for its full box; widen slightly for the footprint.
 
 ## Response Format
 
@@ -282,21 +330,22 @@ Respond ONLY with a JSON object:
 }
 
 ## Rules
-- Identify 4-10 major sections (not individual nozzles — those are connection points ON sections)
+- Identify 4-10 major sections (individual nozzles are connection points ON sections, not sections)
+- When a dimension block has a label, name that section from the label and keep its exact block ID
 - Use EXACT dimension text values from the dimension blocks (e.g., "15'-0 1/8\\"")
 - Use EXACT block IDs from the *D## blocks for dimBlocks mapping
+- Prefer witness-confirmed blocks; a "zone approx" block may still be used but is lower-confidence
 - mainDim should be "Height" for vertical sections (ducts), "Width" for horizontal
-- upstream/downstream follow gas flow: Turbine → ... → Stack
+- upstream/downstream follow gas flow: Turbine to Stack
 - Bounding boxes should roughly enclose the section's visual footprint
 - If you can't identify a section confidently, skip it (fewer accurate > more guesses)
 - Each dimension block should belong to AT MOST one section`;
 
   try {
     const result = await generateText({
-      model: "anthropic/claude-sonnet-4.6" as any,
+      model: THINKING_MODEL as any,
       system: systemPrompt,
       prompt: "Analyze this engineering drawing and identify the major system sections with their dimensions and stretch zones.",
-      temperature: 0.2,
     });
 
     const text = result.text.trim();
