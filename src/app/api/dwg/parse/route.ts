@@ -5,6 +5,7 @@ import { parseDwg, extractComponents, parseSvgViewBox } from "@/lib/dwg";
 import { put } from "@vercel/blob";
 import { getDb } from "@/lib/db";
 import { performPreScan, extractDimBlocksFromSvg } from "@/lib/ai/prescan";
+import { classifySheetType } from "@/lib/dwg/sheet-type";
 
 export const maxDuration = 60; // Allow up to 60s for large DWG files
 export const dynamic = "force-dynamic";
@@ -55,23 +56,31 @@ export async function POST(req: NextRequest) {
   const components = extractComponents(parseResult);
   parseResult.components = components;
 
+  // Classify sheet type: GA sheets are resizable (have real dimensions);
+  // P&ID sheets are schematic and skip dim-block extraction + AI pre-scan.
+  const sheetType = classifySheetType(parseResult);
+
   // AI Pre-Scan: identify major system sections from parsed data
   let aiSections = null;
-  try {
-    const dimBlockInfo = extractDimBlocksFromSvg(parseResult.svg);
-    const preScanResult = await performPreScan({
-      dimensions: parseResult.dimensions,
-      components,
-      titleBlock: parseResult.titleBlock,
-      entitySummary: parseResult.entitySummary,
-      viewBox,
-      dimBlockInfo,
-    });
-    aiSections = preScanResult;
-    console.log(`[ELF prescan] ${preScanResult.sections.length} sections identified: ${preScanResult.summary}`);
-  } catch (err) {
-    console.error("[ELF prescan] Failed (non-blocking):", err);
-    // Pre-scan failure is non-blocking — the drawing still uploads fine
+  if (sheetType === "GA") {
+    try {
+      const dimBlockInfo = extractDimBlocksFromSvg(parseResult.svg);
+      const preScanResult = await performPreScan({
+        dimensions: parseResult.dimensions,
+        components,
+        titleBlock: parseResult.titleBlock,
+        entitySummary: parseResult.entitySummary,
+        viewBox,
+        dimBlockInfo,
+      });
+      aiSections = preScanResult;
+      console.log(`[ELF prescan] ${preScanResult.sections.length} sections identified: ${preScanResult.summary}`);
+    } catch (err) {
+      console.error("[ELF prescan] Failed (non-blocking):", err);
+      // Pre-scan failure is non-blocking — the drawing still uploads fine
+    }
+  } else {
+    console.log(`[ELF prescan] skipped — sheetType=${sheetType} (not resizable)`);
   }
 
   // Upload raw DWG to Blob
@@ -110,6 +119,7 @@ export async function POST(req: NextRequest) {
       dwg_layers = ${layerData}::jsonb,
       dwg_metadata = ${metadataJson}::jsonb,
       dwg_ai_sections = ${aiSectionsJson}::jsonb,
+      dwg_sheet_type = ${sheetType},
       updated_at = now()
     WHERE id = ${projectId}
   `;
@@ -126,5 +136,6 @@ export async function POST(req: NextRequest) {
     dimensions: parseResult.dimensions,
     viewBox,
     aiSections,
+    sheetType,
   });
 }

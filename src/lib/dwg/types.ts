@@ -114,6 +114,8 @@ export interface DwgSheet {
   metadata: DwgTitleBlock;
   /** Components matched across sheets share a correlationId */
   correlationMap?: Record<string, string>; // componentId → correlationId
+  /** "GA" = resizable general arrangement; "PID" = non-resizable schematic. */
+  sheetType?: import("./sheet-type").SheetType;
 }
 
 /** Lightweight project data stored in DB (no SVG, no raw geometry) */

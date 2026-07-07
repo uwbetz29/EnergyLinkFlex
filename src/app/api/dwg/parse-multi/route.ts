@@ -6,6 +6,7 @@ import { correlateSheets, detectSheetView } from "@/lib/dwg/extractor";
 import { put } from "@vercel/blob";
 import { getDb } from "@/lib/db";
 import type { DwgSheet } from "@/lib/dwg/types";
+import { classifySheetType } from "@/lib/dwg/sheet-type";
 
 export const maxDuration = 120; // Multi-sheet parsing needs more time
 export const dynamic = "force-dynamic";
@@ -97,6 +98,7 @@ export async function POST(req: NextRequest) {
       components,
       layers: parseResult.layers,
       metadata: parseResult.titleBlock,
+      sheetType: classifySheetType(parseResult),
     });
 
     allSheetComponents.push(components);
