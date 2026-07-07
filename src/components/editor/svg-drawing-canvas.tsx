@@ -1405,55 +1405,6 @@ export function SvgDrawingCanvas() {
     setPan(0, 0);
   }, [setZoom, setPan, svgSize]);
 
-  /* ─── Smooth wheel zoom toward cursor ─── */
-  useEffect(() => {
-    const wrap = wrapRef.current;
-    if (!wrap) return;
-
-    const handler = (e: WheelEvent) => {
-      e.preventDefault();
-      const { w, h } = svgSize;
-      if (!w || !h) return;
-
-      const state = useEditorStore.getState();
-      const oldZoom = state.zoom;
-      const oldPanX = state.panX;
-      const oldPanY = state.panY;
-
-      const isPinch = e.ctrlKey;
-      const factor = isPinch
-        ? 1 - e.deltaY * 0.01
-        : e.deltaY < 0
-          ? 1.12
-          : 0.89;
-
-      const newZoom = Math.max(0.05, Math.min(8, oldZoom * factor));
-
-      // Zoom toward cursor: find the canvas point under cursor, keep it there
-      const rect = wrap.getBoundingClientRect();
-      const cursorX = e.clientX - rect.left;
-      const cursorY = e.clientY - rect.top;
-
-      // Canvas point under cursor (in unscaled SVG units)
-      const canvasX =
-        (cursorX - rect.width / 2 - oldPanX + (w * oldZoom) / 2) / oldZoom;
-      const canvasY =
-        (cursorY - rect.height / 2 - oldPanY + (h * oldZoom) / 2) / oldZoom;
-
-      // New pan to keep that canvas point under cursor
-      const newPanX =
-        cursorX - rect.width / 2 - canvasX * newZoom + (w * newZoom) / 2;
-      const newPanY =
-        cursorY - rect.height / 2 - canvasY * newZoom + (h * newZoom) / 2;
-
-      state.setZoom(newZoom);
-      state.setPan(newPanX, newPanY);
-    };
-
-    wrap.addEventListener("wheel", handler, { passive: false });
-    return () => wrap.removeEventListener("wheel", handler);
-  }, [svgSize]);
-
   /* ─── Pan with drag (5px threshold) ─── */
   const onMouseDown = (e: React.MouseEvent) => {
     const target = e.target as Element;
@@ -1773,57 +1724,97 @@ export function SvgDrawingCanvas() {
         </div>
       )}
 
-      {/* Floating controls */}
-      <div className="absolute top-3 left-3 flex gap-1 z-10">
-        {[
-          {
-            label: "+",
-            action: () => setZoom(useEditorStore.getState().zoom * 1.25),
-          },
-          {
-            label: "\u2212",
-            action: () => setZoom(useEditorStore.getState().zoom * 0.8),
-          },
-          { label: "\u21F2", action: zoomFit },
-        ].map((btn) => (
-          <button
-            key={btn.label}
-            onClick={btn.action}
-            className="w-[32px] h-[32px] rounded-lg bg-white/95
-                       border border-gray-200 text-gray-500 flex items-center justify-center
-                       text-[14px] hover:bg-white hover:text-gray-800
-                       hover:border-gray-300 transition-all shadow-sm"
-          >
-            {btn.label}
-          </button>
-        ))}
+      {/* Floating controls \u2014 zoom cluster, made deliberately large/high-contrast
+          per product requirement: zoom is buttons-only now (no scroll/pinch),
+          so these controls must be impossible to miss. */}
+      <div className="absolute top-3 left-3 z-10 flex flex-col items-start gap-1">
+        <span className="ml-1 text-[10px] font-bold uppercase tracking-wider text-gray-500">
+          Zoom
+        </span>
+        <div
+          className="flex items-center gap-1.5 rounded-2xl bg-white
+                     border-2 border-gray-300 shadow-xl px-2 py-2"
+        >
+          {[
+            {
+              label: "\u2212",
+              title: "Zoom out",
+              action: () => setZoom(useEditorStore.getState().zoom * 0.8),
+            },
+          ].map((btn) => (
+            <button
+              key={btn.label}
+              onClick={btn.action}
+              title={btn.title}
+              aria-label={btn.title}
+              className="w-11 h-11 rounded-xl bg-gray-50
+                         border-2 border-gray-300 text-gray-700 flex items-center justify-center
+                         text-2xl font-bold leading-none hover:bg-gray-100 hover:text-gray-900
+                         hover:border-gray-400 active:bg-gray-200 transition-all shadow-sm"
+            >
+              {btn.label}
+            </button>
+          ))}
 
-        {/* Undo / Redo */}
-        <div className="ml-2 flex gap-1">
-          <button
-            onClick={() => useEditorStore.getState().undo()}
-            className="w-[32px] h-[32px] rounded-lg bg-white/95
-                       border border-gray-200 text-gray-500 flex items-center justify-center
-                       text-[13px] hover:bg-white hover:text-gray-800
-                       hover:border-gray-300 transition-all shadow-sm
-                       disabled:opacity-25 disabled:cursor-not-allowed"
-            disabled={historyIndex < 0}
-            title="Undo (\u2318Z)"
+          <div
+            className="min-w-[60px] px-1 text-center text-sm font-extrabold
+                       text-gray-800 tabular-nums select-none"
+            aria-label="Current zoom level"
           >
-            {"\u21B6"}
-          </button>
-          <button
-            onClick={() => useEditorStore.getState().redo()}
-            className="w-[32px] h-[32px] rounded-lg bg-white/95
-                       border border-gray-200 text-gray-500 flex items-center justify-center
-                       text-[13px] hover:bg-white hover:text-gray-800
-                       hover:border-gray-300 transition-all shadow-sm
-                       disabled:opacity-25 disabled:cursor-not-allowed"
-            disabled={historyIndex >= historyLength - 1}
-            title="Redo (\u2318\u21E7Z)"
-          >
-            {"\u21B7"}
-          </button>
+            {Math.round(zoom * 100)}%
+          </div>
+
+          {[
+            {
+              label: "+",
+              title: "Zoom in",
+              action: () => setZoom(useEditorStore.getState().zoom * 1.25),
+            },
+            { label: "\u21F2", title: "Fit to view", action: zoomFit },
+          ].map((btn) => (
+            <button
+              key={btn.label}
+              onClick={btn.action}
+              title={btn.title}
+              aria-label={btn.title}
+              className="w-11 h-11 rounded-xl bg-gray-50
+                         border-2 border-gray-300 text-gray-700 flex items-center justify-center
+                         text-2xl font-bold leading-none hover:bg-gray-100 hover:text-gray-900
+                         hover:border-gray-400 active:bg-gray-200 transition-all shadow-sm"
+            >
+              {btn.label}
+            </button>
+          ))}
+
+          {/* Undo / Redo */}
+          <div className="ml-1 pl-2 flex gap-1.5 border-l-2 border-gray-200">
+            <button
+              onClick={() => useEditorStore.getState().undo()}
+              className="w-11 h-11 rounded-xl bg-gray-50
+                         border-2 border-gray-300 text-gray-700 flex items-center justify-center
+                         text-lg hover:bg-gray-100 hover:text-gray-900
+                         hover:border-gray-400 active:bg-gray-200 transition-all shadow-sm
+                         disabled:opacity-25 disabled:cursor-not-allowed"
+              disabled={historyIndex < 0}
+              title="Undo (\u2318Z)"
+              aria-label="Undo"
+            >
+              {"\u21B6"}
+            </button>
+            <button
+              onClick={() => useEditorStore.getState().redo()}
+              className="w-11 h-11 rounded-xl bg-gray-50
+                         border-2 border-gray-300 text-gray-700 flex items-center justify-center
+                         text-lg hover:bg-gray-100 hover:text-gray-900
+                         hover:border-gray-400 active:bg-gray-200 transition-all shadow-sm
+                         disabled:opacity-25 disabled:cursor-not-allowed"
+              disabled={historyIndex >= historyLength - 1}
+              title="Redo (\u2318\u21E7Z)"
+              aria-label="Redo"
+            >
+              {"\u21B7"}
+            </button>
+          </div>
         </div>
       </div>
 
@@ -1842,15 +1833,6 @@ export function SvgDrawingCanvas() {
         />
       )}
 
-      {/* Zoom indicator */}
-      <div
-        className="absolute bottom-3 right-3 px-2.5 py-1.5 rounded-lg
-                     bg-white/90 border border-gray-200 text-gray-500
-                     text-[11px] font-semibold z-10 shadow-sm"
-      >
-        {Math.round(zoom * 100)}%
-      </div>
-
       {/* Instructions hint */}
       {svgLoaded &&
         !selectedId &&
@@ -1861,7 +1843,7 @@ export function SvgDrawingCanvas() {
                      px-4 py-2 rounded-xl bg-blue-50 border border-blue-200
                      text-blue-600/70 text-[11px] font-medium shadow-sm"
           >
-            Click any dimension text on the drawing to edit · Scroll to zoom
+            Click any dimension text on the drawing to edit · Use +/− to zoom
             · Drag to pan
           </div>
         )}
