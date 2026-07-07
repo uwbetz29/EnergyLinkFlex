@@ -124,3 +124,31 @@ export interface DwgProjectData {
   layers: DwgLayer[];
   metadata: DwgTitleBlock;
 }
+
+/* ─── User markups (red annotations layer, all sheet types) ─── */
+export type MarkupId = string;
+interface MarkupBase {
+  id: MarkupId;
+  sheetNumber: number;
+}
+export interface LineMarkup extends MarkupBase {
+  type: "line";
+  x1: number;
+  y1: number;
+  x2: number;
+  y2: number;
+}
+export interface ArrowMarkup extends MarkupBase {
+  type: "arrow";
+  x1: number;
+  y1: number;
+  x2: number;
+  y2: number;
+}
+export interface TextMarkup extends MarkupBase {
+  type: "text";
+  x: number;
+  y: number;
+  text: string;
+}
+export type Markup = LineMarkup | ArrowMarkup | TextMarkup;
