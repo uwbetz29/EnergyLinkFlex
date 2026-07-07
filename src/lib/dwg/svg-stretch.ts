@@ -445,17 +445,22 @@ export function applyMultiStretch(
   // coincident zones MERGE (summed delta); properly nested zones compose via the
   // axis map; PARTIAL overlaps (and overlapping horizontals with mismatched
   // viewRegions) keep the earlier spec and skip the later one with a warning.
-  const regionKey = (sp: Spec) =>
+  // Two specs with DIFFERENT crossBands are automatically disjoint (U2): they
+  // never enter the overlap/containment test and each forms its own group.
+  const viewKey = (sp: Spec) =>
     sp.viewRegion ? `${sp.viewRegion.xMin}:${sp.viewRegion.xMax}` : "";
+  const bandKey = (sp: Spec) =>
+    sp.crossBand ? `${sp.crossBand.lo}:${sp.crossBand.hi}` : "";
   const kept: Spec[] = [];
   for (const sp of specs) {
     let skip = false;
     let merged = false;
     for (const k of kept) {
       if (k.axis !== sp.axis) continue;
+      if (bandKey(k) !== bandKey(sp)) continue; // different cross-bands: independent zones
       const overlap = Math.min(k.far, sp.far) - Math.max(k.near, sp.near);
       if (overlap <= AXIS_TOL) continue; // disjoint
-      if (regionKey(k) !== regionKey(sp)) { skip = true; break; } // mismatched view scope
+      if (viewKey(k) !== viewKey(sp)) { skip = true; break; } // mismatched view scope
       const kHasSp = contains(k, sp);
       const spHasK = contains(sp, k);
       if (kHasSp && spHasK) {
@@ -481,12 +486,15 @@ export function applyMultiStretch(
   }
   if (kept.length === 0) return { ok: true, transformed: 0 };
 
-  // Build ONE composed piecewise-linear map per (axis, viewRegion) group.
+  // Build ONE composed piecewise-linear map per (axis, viewRegion, crossBand)
+  // group. crossBand joins the key (U2): same-band specs compose into one map;
+  // different-band specs each get their own map and never cross-classify.
   type AxisGroup = { axis: "x" | "y"; viewRegion?: { xMin: number; xMax: number };
+                     crossBand?: { lo: number; hi: number };
                      segments: Segment[] };
   const groupMap = new Map<string, Spec[]>();
   for (const sp of kept) {
-    const key = `${sp.axis}|${regionKey(sp)}`;
+    const key = `${sp.axis}|${viewKey(sp)}|${bandKey(sp)}`;
     const list = groupMap.get(key);
     if (list) list.push(sp);
     else groupMap.set(key, [sp]);
@@ -498,7 +506,8 @@ export function applyMultiStretch(
       list.map((sp) => ({ near: sp.near, far: sp.far, delta: sp.delta }))
     );
     if (segments.length === 0) continue;
-    groups.push({ axis: list[0].axis, viewRegion: list[0].viewRegion, segments });
+    groups.push({ axis: list[0].axis, viewRegion: list[0].viewRegion,
+                  crossBand: list[0].crossBand, segments });
     // viewBox growth derives from the map's tail (not a blind delta sum), so it
     // stays consistent with the geometry even when a container's delta is residual.
     const growth = axisGrowth(segments);
@@ -534,23 +543,47 @@ export function applyMultiStretch(
     if (!pos) continue;
     const annotation = isAnnotationElement(child);
 
-    let sx = 1, sy = 1, tx = 0, ty = 0;
+    // Two translate accumulators per axis: RIDE (rigid shifts — annotations,
+    // out-of-band elements, downstream tails: always scale 1) and SCALE-ORIGIN
+    // (the origin-correction translate that accompanies an in-band scale).
+    // Written as separate translate() pieces so the leading translate reads as
+    // the pure rigid shift (I2) while the composed mapping stays exact.
+    let sx = 1, sy = 1, rtx = 0, rty = 0, stx = 0, sty = 0;
     for (const g of groups) {
       // Width scoping: skip elements outside the edited view.
       if (g.viewRegion && (pos.x < g.viewRegion.xMin || pos.x > g.viewRegion.xMax)) continue;
 
       const c = g.axis === "y" ? pos.y : pos.x;
+      // 2D cross-band scoping (U2): the cross axis is derived from the stretch
+      // axis (Y for an X-stretch, X for a Y-stretch). Half-open with tolerance:
+      // in band ⟺ lo − TOL ≤ c' < hi + TOL. Out-of-band elements NEVER scale on
+      // the stretch axis: like annotations they ride their segment's near-edge
+      // offset — identity in/before the zone (row 6), the map tail (axisGrowth)
+      // downstream (row 5 = row 4's `after` case, invariant I2).
+      let inBand = true;
+      if (g.crossBand) {
+        const cross = g.axis === "y" ? pos.x : pos.y;
+        inBand = g.crossBand.lo - AXIS_TOL <= cross && cross < g.crossBand.hi + AXIS_TOL;
+      }
       const p = placeOnAxis(g.segments, c);
       // Annotations NEVER scale: they ride their segment's near-edge offset
       // (the shift accumulated below the segment). Equipment maps exactly: c ↦ f(c).
-      const sc = annotation ? 1 : p.scale;
-      const t = annotation ? p.annTranslate : p.translate;
-      if (g.axis === "y") { sy *= sc; ty += t; }
-      else { sx *= sc; tx += t; }
+      const rigid = annotation || !inBand;
+      const sc = rigid ? 1 : p.scale;
+      const t = rigid ? p.annTranslate : p.translate;
+      if (g.axis === "y") {
+        sy *= sc;
+        if (sc === 1) rty += t; else sty += t;
+      } else {
+        sx *= sc;
+        if (sc === 1) rtx += t; else stx += t;
+      }
     }
 
+    const tx = rtx + stx, ty = rty + sty;
     if (sx !== 1 || sy !== 1 || tx !== 0 || ty !== 0) {
-      child.setAttribute("transform", `translate(${tx}, ${ty}) scale(${sx}, ${sy})`);
+      const origin = stx !== 0 || sty !== 0 ? ` translate(${stx}, ${sty})` : "";
+      child.setAttribute("transform", `translate(${rtx}, ${rty})${origin} scale(${sx}, ${sy})`);
       child.setAttribute("data-stretch-transform", "true");
       transformed++;
     }
