@@ -17,7 +17,8 @@ import {
 import type { StretchParams } from "@/lib/dwg/svg-stretch";
 import { computeViewRegions, viewOf } from "@/lib/dwg/view-model";
 import { isAnnotationBlockName, stripAnnotationUses } from "@/lib/dwg/annotations";
-import { getDimBlockBounds, dimBlockBox2D } from "@/lib/dwg/dim-geometry";
+import { getDimBlockBounds, dimBlockBox2D, computeComponentBand } from "@/lib/dwg/dim-geometry";
+import { detectDetachedAssemblies, CONF_MIN } from "@/lib/dwg/detached";
 import type { ComponentDef } from "@/stores/editor-store";
 
 /* ─── Constants ─── */
@@ -1125,12 +1126,25 @@ export function SvgDrawingCanvas() {
           const dimX = (dimBounds.min + dimBounds.max) / 2; // width dim: dimBounds are X coords
           viewRegion = viewOf(dimX, viewRegions) ?? undefined;
         }
+        // U2 2D scoping: confine this stretch's SCALING to the component's cross-axis
+        // band (derived from real dim geometry) so it stops ovaling stacked neighbours.
+        // Only scope when the component has a REAL cross-axis dim, so the band is its true
+        // extent — NOT the stretch dim's short extension-line span, which would under-scale
+        // the edit. Without one, leave crossBand undefined → today's full-band behaviour.
+        const crossDir = dir === "horizontal" ? "vertical" : "horizontal";
+        const hasCrossDim =
+          !!comp.dimBlocks &&
+          Object.keys(comp.dimBlocks).some((k) => dimKeyToDirection(k) === crossDir);
+        const band = hasCrossDim
+          ? computeComponentBand(comp.dimBlocks, svgEl, dir === "horizontal" ? "x" : "y")
+          : null;
         stretches.push({
           componentId: compId,
           svgBounds,
           direction: dir,
           delta,
           viewRegion,
+          crossBand: band ? { lo: band.crossBand[0], hi: band.crossBand[1] } : undefined,
         });
         editedBlockIds.add(blockId);
 
@@ -1146,6 +1160,28 @@ export function SvgDrawingCanvas() {
     // its children already produce isn't double-counted (else the total overshoots,
     // and the same double-count would hit the spanning re-value below). Disjoint
     // component-only edits (the common case) pass through unchanged.
+    // U4 safety-net: a HIGH-confidence detached detail sharing an actively-scaling
+    // cross-band can't be held rigid by the crossBand engine (which holds cross-SEPARATED
+    // details for free but not shared-band ones), so warn for manual review. On the real
+    // drawings U3 is low-confidence (the skid is cross-separated + tiny), so no spurious
+    // warning fires; this only triggers for a hypothetical large shared-band detail.
+    let detachedWarn = false;
+    if (modelSpace) {
+      const highConf = detectDetachedAssemblies(modelSpace).filter(
+        (d) => d.confidence >= CONF_MIN
+      );
+      detachedWarn = highConf.some((d) =>
+        stretches.some((s) => {
+          if (!s.crossBand) return false;
+          const cross =
+            s.direction === "horizontal"
+              ? (d.bbox.yMin + d.bbox.yMax) / 2
+              : (d.bbox.xMin + d.bbox.xMax) / 2;
+          return cross >= s.crossBand.lo && cross <= s.crossBand.hi;
+        })
+      );
+    }
+
     const resolved = resolveContainerResiduals(stretches);
 
     // Compose all queued stretches in a single pass (multi-dimension, multi-section).
@@ -1165,6 +1201,13 @@ export function SvgDrawingCanvas() {
     // SAME resolved deltas as the geometry so a dim spanning both overall+component
     // adds the true growth, not the double-counted sum.
     revalueSpanningDims(svgEl, resolved, editedBlockIds);
+
+    // U4: the stretch applied cleanly, but flag a shared-band detached detail for review.
+    if (detachedWarn) {
+      useEditorStore
+        .getState()
+        .setStretchWarning("Detached details present — review manually.");
+    }
 
     // Show SVG after all transforms are applied (prevents flash)
     svgEl.style.visibility = "";
