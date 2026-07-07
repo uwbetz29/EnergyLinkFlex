@@ -17,6 +17,7 @@ import {
 import type { StretchParams } from "@/lib/dwg/svg-stretch";
 import { computeViewRegions, viewOf } from "@/lib/dwg/view-model";
 import { isAnnotationBlockName, stripAnnotationUses } from "@/lib/dwg/annotations";
+import { getDimBlockBounds, dimBlockBox2D } from "@/lib/dwg/dim-geometry";
 import type { ComponentDef } from "@/stores/editor-store";
 
 /* ─── Constants ─── */
@@ -925,95 +926,6 @@ export function SvgDrawingCanvas() {
     setInlineEdit(null);
   }
 
-  /**
-   * Extract the precise stretch zone from a dimension block's extension lines.
-   *
-   * The block definition in <defs> has local coordinates. The <use> element
-   * positions it in Model_Space via x/y attributes and a transform. We need
-   * to convert the block-local line coords to Model_Space global coords by
-   * finding the <use> that references this block and adding its offset.
-   *
-   * Returns bounds in Model_Space coordinates (Y-up, before the Y-flip).
-   */
-  function getDimBlockBounds(
-    svgEl: SVGSVGElement,
-    blockId: string,
-    direction: "vertical" | "horizontal"
-  ): { min: number; max: number } | null {
-    const block = svgEl.querySelector(`[id="${CSS.escape(blockId)}"]`);
-    if (!block) return null;
-
-    const lines = block.querySelectorAll("line");
-    if (lines.length === 0) return null;
-
-    // Find the <use> element that references this block to get its global position
-    // The <use> has x/y attributes that offset the block into Model_Space
-    let offsetX = 0;
-    let offsetY = 0;
-    const useEl = svgEl.querySelector(`use[href="#${CSS.escape(blockId)}"]`);
-    if (useEl) {
-      offsetX = parseFloat(useEl.getAttribute("x") || "0");
-      offsetY = parseFloat(useEl.getAttribute("y") || "0");
-    }
-
-    let min = Infinity;
-    let max = -Infinity;
-
-    for (const line of lines) {
-      if (direction === "vertical") {
-        // For height dimensions: extension lines run vertically (same X, different Y)
-        const y1 = parseFloat(line.getAttribute("y1") || "0") + offsetY;
-        const y2 = parseFloat(line.getAttribute("y2") || "0") + offsetY;
-        min = Math.min(min, y1, y2);
-        max = Math.max(max, y1, y2);
-      } else {
-        const x1 = parseFloat(line.getAttribute("x1") || "0") + offsetX;
-        const x2 = parseFloat(line.getAttribute("x2") || "0") + offsetX;
-        min = Math.min(min, x1, x2);
-        max = Math.max(max, x1, x2);
-      }
-    }
-
-    if (!isFinite(min) || !isFinite(max) || min === max) return null;
-    return { min, max };
-  }
-
-  /**
-   * Full 2D bounding box of a dimension block's lines, in Model_Space coords (Y-up),
-   * including the <use> offset. Unlike getDimBlockBounds (one axis), this returns both
-   * axes so a component's overlay box can be derived from real drawing geometry.
-   */
-  function dimBlockBox2D(
-    svgEl: SVGSVGElement,
-    blockId: string
-  ): { xMin: number; xMax: number; yMin: number; yMax: number } | null {
-    const block = svgEl.querySelector(`[id="${CSS.escape(blockId)}"]`);
-    if (!block) return null;
-    const lines = block.querySelectorAll("line");
-    if (lines.length === 0) return null;
-    let ox = 0,
-      oy = 0;
-    const useEl = svgEl.querySelector(`use[href="#${CSS.escape(blockId)}"]`);
-    if (useEl) {
-      ox = parseFloat(useEl.getAttribute("x") || "0");
-      oy = parseFloat(useEl.getAttribute("y") || "0");
-    }
-    let xMin = Infinity,
-      xMax = -Infinity,
-      yMin = Infinity,
-      yMax = -Infinity;
-    for (const line of lines) {
-      const x1 = parseFloat(line.getAttribute("x1") || "0") + ox;
-      const x2 = parseFloat(line.getAttribute("x2") || "0") + ox;
-      const y1 = parseFloat(line.getAttribute("y1") || "0") + oy;
-      const y2 = parseFloat(line.getAttribute("y2") || "0") + oy;
-      xMin = Math.min(xMin, x1, x2);
-      xMax = Math.max(xMax, x1, x2);
-      yMin = Math.min(yMin, y1, y2);
-      yMax = Math.max(yMax, y1, y2);
-    }
-    return isFinite(xMin) ? { xMin, xMax, yMin, yMax } : null;
-  }
 
   /**
    * Re-position component overlay boxes onto the real equipment. The AI pre-scan's
