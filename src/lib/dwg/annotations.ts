@@ -32,6 +32,21 @@ export function isAnnotationBlockName(href: string): boolean {
 }
 
 /**
+ * Remove annotation-clutter <use> elements from a raw LibreDWG SVG STRING, at
+ * ingestion — before it ever reaches the DOM. This is the robust counterpart to the
+ * DOM-level strip (postProcessSvgDom's display:none): a <use> that never exists can't
+ * be revived by a later stretch/undo/re-render. Only ANNOTATION_BLOCK_NAMES clutter is
+ * dropped (CriticalFeature balloons — bug #1's "black blobs" — borders, title blocks,
+ * datum/section/projection symbols); dimension (*D##) and CENTER LINE callout <use>s and
+ * all raw geometry are kept. isAnnotationBlockName stays the single source of truth.
+ */
+export function stripAnnotationUses(svg: string): string {
+  return svg.replace(/<use\b[^>]*\bhref="#([^"]*)"[^>]*>/g, (match, name) =>
+    isAnnotationBlockName(name) ? "" : match
+  );
+}
+
+/**
  * True when a Model_Space child is an annotation (dimension, text, callout, symbol)
  * rather than equipment geometry. Equipment = raw geometry not wrapped in a named
  * annotation <use>. Note: unlike the render strip (which KEEPS "CENTER LINE" callouts

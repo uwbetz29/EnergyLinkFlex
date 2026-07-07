@@ -16,7 +16,7 @@ import {
 } from "@/lib/dwg/svg-stretch";
 import type { StretchParams } from "@/lib/dwg/svg-stretch";
 import { computeViewRegions, viewOf } from "@/lib/dwg/view-model";
-import { isAnnotationBlockName } from "@/lib/dwg/annotations";
+import { isAnnotationBlockName, stripAnnotationUses } from "@/lib/dwg/annotations";
 import type { ComponentDef } from "@/stores/editor-store";
 
 /* ─── Constants ─── */
@@ -160,7 +160,10 @@ const HIDDEN_LAYERS = new Set([
 ]);
 
 function processLibreDwgSvg(svgText: string): string {
-  return svgText
+  return stripAnnotationUses(svgText)
+    // Strip annotation-clutter <use>s (CriticalFeature blobs, borders, title/datum
+    // symbols) at the source above, so no later stretch/undo/re-render can revive them
+    // — the DOM-level display:none hide in postProcessSvgDom didn't stick at runtime.
     // White strokes → black (drawing lines on white background)
     .replace(/stroke="rgb\(255,255,255\)"/g, 'stroke="rgb(0,0,0)"')
     // White fills → black (text needs this to be visible)
