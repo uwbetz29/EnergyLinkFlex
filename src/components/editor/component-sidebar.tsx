@@ -50,7 +50,7 @@ export function ComponentSidebar() {
   const compOriginals = selectedId ? originals[selectedId] : undefined;
 
   return (
-    <div className="w-[340px] flex-shrink-0 bg-white flex flex-col overflow-hidden z-20 shadow-[-4px_0_30px_rgba(0,0,0,0.15)]">
+    <div className="flex-1 min-h-0 bg-white flex flex-col overflow-hidden">
       {/* Header */}
       <div className="px-[18px] py-3.5 border-b border-[rgba(0,60,160,0.08)] flex items-center justify-between bg-[#fafbfd]">
         <span className="text-[11px] font-bold text-[#a5b8d4] uppercase tracking-[0.8px]">

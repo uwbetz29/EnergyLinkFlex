@@ -485,8 +485,6 @@ export function SvgDrawingCanvas() {
 
   const {
     svgUrl,
-    dwgLayers,
-    visibleLayers,
     components,
     selectedId,
     hiddenComponents,
@@ -499,7 +497,6 @@ export function SvgDrawingCanvas() {
     select,
     setZoom,
     setPan,
-    toggleLayer,
     setSvgViewBox,
     setStretchWarning,
   } = useEditorStore();
@@ -516,7 +513,13 @@ export function SvgDrawingCanvas() {
 
     async function loadSvg() {
       try {
-        const res = await fetch(svgUrl!);
+        // In dev, bypass the HTTP disk cache: the drawing SVG can be ~40MB and a
+        // sandboxed dev browser may fail to cache it (ERR_CACHE_WRITE_FAILURE),
+        // aborting the fetch. Prod keeps default caching (CDN-backed, fast reloads).
+        const res = await fetch(
+          svgUrl!,
+          process.env.NODE_ENV === "production" ? undefined : { cache: "no-store" }
+        );
         const svgText = await res.text();
         if (cancelled) return;
 
@@ -973,6 +976,144 @@ export function SvgDrawingCanvas() {
   }
 
   /**
+   * Full 2D bounding box of a dimension block's lines, in Model_Space coords (Y-up),
+   * including the <use> offset. Unlike getDimBlockBounds (one axis), this returns both
+   * axes so a component's overlay box can be derived from real drawing geometry.
+   */
+  function dimBlockBox2D(
+    svgEl: SVGSVGElement,
+    blockId: string
+  ): { xMin: number; xMax: number; yMin: number; yMax: number } | null {
+    const block = svgEl.querySelector(`[id="${CSS.escape(blockId)}"]`);
+    if (!block) return null;
+    const lines = block.querySelectorAll("line");
+    if (lines.length === 0) return null;
+    let ox = 0,
+      oy = 0;
+    const useEl = svgEl.querySelector(`use[href="#${CSS.escape(blockId)}"]`);
+    if (useEl) {
+      ox = parseFloat(useEl.getAttribute("x") || "0");
+      oy = parseFloat(useEl.getAttribute("y") || "0");
+    }
+    let xMin = Infinity,
+      xMax = -Infinity,
+      yMin = Infinity,
+      yMax = -Infinity;
+    for (const line of lines) {
+      const x1 = parseFloat(line.getAttribute("x1") || "0") + ox;
+      const x2 = parseFloat(line.getAttribute("x2") || "0") + ox;
+      const y1 = parseFloat(line.getAttribute("y1") || "0") + oy;
+      const y2 = parseFloat(line.getAttribute("y2") || "0") + oy;
+      xMin = Math.min(xMin, x1, x2);
+      xMax = Math.max(xMax, x1, x2);
+      yMin = Math.min(yMin, y1, y2);
+      yMax = Math.max(yMax, y1, y2);
+    }
+    return isFinite(xMin) ? { xMin, xMax, yMin, yMax } : null;
+  }
+
+  /**
+   * Re-position component overlay boxes onto the real equipment. The AI pre-scan's
+   * estimated boxes float off the drawing; instead union each component's dimension
+   * blocks' real geometry (Model_Space) and convert to viewBox percentages. Runs once
+   * per SVG load; components without dimBlocks keep their prior box.
+   */
+  function deriveComponentBoxes(svgEl: SVGSVGElement) {
+    const vb = svgEl.getAttribute("viewBox")?.split(/\s+/).map(Number);
+    if (!vb || vb.length !== 4) return;
+    const [vbX, vbY, vbW, vbH] = vb;
+    if (vbW <= 0 || vbH <= 0) return;
+
+    const store = useEditorStore.getState();
+    const comps = store.components;
+    const updated: Record<string, ComponentDef> = {};
+    let changed = false;
+
+    for (const comp of Object.values(comps)) {
+      const entries = comp.dimBlocks ? Object.entries(comp.dimBlocks) : [];
+      if (entries.length === 0) continue;
+
+      // Prefer each dim's on-axis MEASURED extent (a width dim's X, a height dim's Y)
+      // — that is the feature's real edge, tight. The full block bbox would also
+      // include the offset out to the dim line, bloating the overlay.
+      let xMin = Infinity,
+        xMax = -Infinity,
+        yMin = Infinity,
+        yMax = -Infinity;
+      let haveX = false,
+        haveY = false;
+      for (const [dimKey, blockId] of entries) {
+        const dir = dimKeyToDirection(dimKey);
+        if (dir === "horizontal") {
+          const b = getDimBlockBounds(svgEl, blockId, "horizontal"); // X range
+          if (b) {
+            xMin = Math.min(xMin, b.min);
+            xMax = Math.max(xMax, b.max);
+            haveX = true;
+          }
+        } else if (dir === "vertical") {
+          const b = getDimBlockBounds(svgEl, blockId, "vertical"); // internal Y range
+          if (b) {
+            yMin = Math.min(yMin, b.min);
+            yMax = Math.max(yMax, b.max);
+            haveY = true;
+          }
+        }
+      }
+      // Missing an axis (component dimensioned on only one axis): fall back to the
+      // full 2D bbox of its blocks for the undetermined axis so the box still spans it.
+      if (!haveX || !haveY) {
+        let bx = Infinity,
+          bX = -Infinity,
+          by = Infinity,
+          bY = -Infinity,
+          any = false;
+        for (const [, blockId] of entries) {
+          const b = dimBlockBox2D(svgEl, blockId);
+          if (!b) continue;
+          bx = Math.min(bx, b.xMin);
+          bX = Math.max(bX, b.xMax);
+          by = Math.min(by, b.yMin);
+          bY = Math.max(bY, b.yMax);
+          any = true;
+        }
+        if (any) {
+          if (!haveX) {
+            xMin = bx;
+            xMax = bX;
+          }
+          if (!haveY) {
+            yMin = by;
+            yMax = bY;
+          }
+        }
+      }
+      if (!isFinite(xMin) || !isFinite(yMin) || xMax <= xMin || yMax <= yMin)
+        continue;
+
+      // Model_Space (Y-up) -> viewBox (Y = -internalY): the top edge is -yMax.
+      const leftPct = ((xMin - vbX) / vbW) * 100;
+      const topPct = ((-yMax - vbY) / vbH) * 100;
+      const widthPct = ((xMax - xMin) / vbW) * 100;
+      const heightPct = ((yMax - yMin) / vbH) * 100;
+
+      // Clamp so an overlay never spills past the drawing edge.
+      const left = Math.max(0, Math.min(100, leftPct));
+      const top = Math.max(0, Math.min(100, topPct));
+      const box: [number, number, number, number] = [
+        left,
+        top,
+        Math.max(0, Math.min(100 - left, widthPct)),
+        Math.max(0, Math.min(100 - top, heightPct)),
+      ];
+      updated[comp.id] = { ...comp, box };
+      changed = true;
+    }
+
+    if (changed) store.setComponents({ ...comps, ...updated });
+  }
+
+  /**
    * Recompute and apply ALL active stretches from the current originals/components state.
    * Uses the actual dimension block extension lines for precise zone definition.
    */
@@ -1259,7 +1400,18 @@ export function SvgDrawingCanvas() {
     const timer = requestAnimationFrame(() => {
       const svgEl = svgContainerRef.current?.querySelector("svg");
       if (svgEl) {
-        extractAndApplyDimensions(svgEl);
+        const comps = useEditorStore.getState().components;
+        const hasDimBlocks = Object.values(comps).some(
+          (c) => c.dimBlocks && Object.keys(c.dimBlocks).length > 0
+        );
+        if (hasDimBlocks) {
+          // AI sections already carry a semantic dim->block mapping; keep those dims
+          // and only re-position the overlay boxes onto the real drawing geometry.
+          deriveComponentBoxes(svgEl);
+        } else {
+          // Fallback (raw DWG blocks, no dim mapping): match nearby dims by proximity.
+          extractAndApplyDimensions(svgEl);
+        }
         setDimsExtracted(true);
       }
     });
@@ -1688,46 +1840,6 @@ export function SvgDrawingCanvas() {
         </div>
       </div>
 
-      {/* Layer panel */}
-      {dwgLayers.length > 0 && (
-        <div
-          className="absolute top-14 left-3 z-10 bg-white/95 backdrop-blur-sm
-                        border border-gray-200 rounded-lg p-2 max-h-[300px] overflow-y-auto
-                        min-w-[160px] shadow-md"
-        >
-          <div className="text-[10px] font-bold text-gray-400 uppercase tracking-wider px-1 mb-1.5">
-            Layers
-          </div>
-          {dwgLayers.map((layer) => (
-            <button
-              key={layer.name}
-              onClick={() => toggleLayer(layer.name)}
-              className={`w-full text-left px-2 py-1 rounded text-[11px] flex items-center gap-2
-                         transition-colors ${
-                           visibleLayers.has(layer.name)
-                             ? "text-gray-700 hover:bg-gray-100"
-                             : "text-gray-300 hover:bg-gray-50"
-                         }`}
-            >
-              <span
-                className="w-2 h-2 rounded-full flex-shrink-0"
-                style={{
-                  background: visibleLayers.has(layer.name)
-                    ? layer.color ?? "#2563eb"
-                    : "transparent",
-                  border: `1.5px solid ${
-                    visibleLayers.has(layer.name)
-                      ? layer.color ?? "#2563eb"
-                      : "rgba(0,0,0,0.15)"
-                  }`,
-                }}
-              />
-              {layer.name}
-            </button>
-          ))}
-        </div>
-      )}
-
       {/* SVG Minimap */}
       {svgLoaded && w > 0 && (
         <SvgMinimap
@@ -1740,7 +1852,7 @@ export function SvgDrawingCanvas() {
 
       {/* Zoom indicator */}
       <div
-        className="absolute bottom-3 right-[352px] px-2.5 py-1.5 rounded-lg
+        className="absolute bottom-3 right-3 px-2.5 py-1.5 rounded-lg
                      bg-white/90 border border-gray-200 text-gray-500
                      text-[11px] font-semibold z-10 shadow-sm"
       >
