@@ -9,6 +9,8 @@
  * identical to the originals (see dim-geometry.test.ts).
  */
 
+import { dimKeyToDirection } from "./svg-stretch";
+
 /** On-axis extent of a dim block's extension lines (vertical → Y, horizontal → X),
  *  including the <use> offset. Returns null for a missing/empty/degenerate block. */
 export function getDimBlockBounds(
@@ -84,4 +86,77 @@ export function dimBlockBox2D(
     yMax = Math.max(yMax, y1, y2);
   }
   return isFinite(xMin) ? { xMin, xMax, yMin, yMax } : null;
+}
+
+/**
+ * U1: derive a component's stretch-axis zone (`aRange`) and cross-axis band
+ * (`crossBand`) from its real dim-block geometry, for a stretch on `axis`.
+ *  - aRange  = union of the component's dim blocks whose direction matches the
+ *    stretch axis (width→X for axis 'x', height→Y for axis 'y').
+ *  - crossBand = union of its cross-axis dim blocks; if it has none, fall back to
+ *    the 2D bbox of its blocks on the cross axis (approximate, but spans the feature).
+ * Returns null when the component has no dim block on the stretch axis (caller skips)
+ * or no way to determine a cross-band. All Model_Space (original, pre-transform) coords.
+ */
+export function computeComponentBand(
+  dimBlocks: Record<string, string> | undefined,
+  svgEl: SVGSVGElement,
+  axis: "x" | "y"
+): { aRange: [number, number]; crossBand: [number, number] } | null {
+  if (!dimBlocks) return null;
+  const entries = Object.entries(dimBlocks);
+  if (entries.length === 0) return null;
+
+  const aDir = axis === "x" ? "horizontal" : "vertical";
+  const cDir = axis === "x" ? "vertical" : "horizontal";
+
+  let aMin = Infinity,
+    aMax = -Infinity,
+    haveA = false;
+  let cMin = Infinity,
+    cMax = -Infinity,
+    haveC = false;
+
+  for (const [dimKey, blockId] of entries) {
+    const dir = dimKeyToDirection(dimKey);
+    if (dir === aDir) {
+      const b = getDimBlockBounds(svgEl, blockId, aDir);
+      if (b) {
+        aMin = Math.min(aMin, b.min);
+        aMax = Math.max(aMax, b.max);
+        haveA = true;
+      }
+    } else if (dir === cDir) {
+      const b = getDimBlockBounds(svgEl, blockId, cDir);
+      if (b) {
+        cMin = Math.min(cMin, b.min);
+        cMax = Math.max(cMax, b.max);
+        haveC = true;
+      }
+    }
+  }
+
+  if (!haveA) return null;
+
+  if (!haveC) {
+    // No cross-axis dim → fall back to the 2D bbox of the blocks on the cross axis.
+    let lo = Infinity,
+      hi = -Infinity,
+      any = false;
+    for (const [, blockId] of entries) {
+      const box = dimBlockBox2D(svgEl, blockId);
+      if (!box) continue;
+      lo = Math.min(lo, axis === "x" ? box.yMin : box.xMin);
+      hi = Math.max(hi, axis === "x" ? box.yMax : box.xMax);
+      any = true;
+    }
+    if (any) {
+      cMin = lo;
+      cMax = hi;
+      haveC = true;
+    }
+  }
+
+  if (!haveC) return null;
+  return { aRange: [aMin, aMax], crossBand: [cMin, cMax] };
 }

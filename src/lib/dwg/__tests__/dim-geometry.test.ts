@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { describe, it, expect } from "vitest";
-import { getDimBlockBounds, dimBlockBox2D } from "../dim-geometry";
-import { makeTwoViewSvg } from "./fixtures";
+import { getDimBlockBounds, dimBlockBox2D, computeComponentBand } from "../dim-geometry";
+import { makeTwoViewSvg, makeComponentBandSvg } from "./fixtures";
 
 const parse = (svg: string) =>
   new DOMParser().parseFromString(svg, "image/svg+xml")
@@ -37,5 +37,41 @@ describe("dim-geometry (extracted pure helpers)", () => {
       yMin: 710,
       yMax: 965,
     });
+  });
+});
+
+describe("computeComponentBand (U1)", () => {
+  const svg = parse(makeComponentBandSvg());
+
+  it("width (x) stretch: aRange = width X extent, crossBand = height Y extent", () => {
+    expect(computeComponentBand({ Width: "*DW", Height: "*DH" }, svg, "x")).toEqual({
+      aRange: [100, 200],
+      crossBand: [50, 150],
+    });
+  });
+
+  it("height (y) stretch: aRange = height Y extent, crossBand = width X extent", () => {
+    expect(computeComponentBand({ Width: "*DW", Height: "*DH" }, svg, "y")).toEqual({
+      aRange: [50, 150],
+      crossBand: [100, 200],
+    });
+  });
+
+  it("returns null when the component has no dim block on the stretch axis", () => {
+    // only a height dim, asked for a width (x) stretch → no A-axis zone
+    expect(computeComponentBand({ Height: "*DH" }, svg, "x")).toBeNull();
+  });
+
+  it("falls back to the 2D bbox for the cross-axis when only the stretch axis is dimensioned", () => {
+    // only a width dim → crossBand (Y) falls back to *DW's extension-line Y span [290,310]
+    expect(computeComponentBand({ Width: "*DW" }, svg, "x")).toEqual({
+      aRange: [100, 200],
+      crossBand: [290, 310],
+    });
+  });
+
+  it("returns null for empty/undefined dimBlocks", () => {
+    expect(computeComponentBand({}, svg, "x")).toBeNull();
+    expect(computeComponentBand(undefined, svg, "x")).toBeNull();
   });
 });

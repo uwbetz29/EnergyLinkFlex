@@ -20,6 +20,22 @@ export function makeTwoViewSvg(): string {
     </g></g></svg>`;
 }
 
+/** A single component dimensioned on BOTH axes, for U1/computeComponentBand tests.
+ *  Width dim *DW: two vertical extension lines at x=100 and x=200 (X extent [100,200]),
+ *  y in [290,310]. Height dim *DH: one vertical line y[50,150] (Y extent [50,150]).
+ *  Zero <use> offset → bounds are the raw line coords. */
+export function makeComponentBandSvg(): string {
+  return `<svg viewBox="0 -400 400 400" xmlns="http://www.w3.org/2000/svg">
+    <defs>
+      <g id="*DW"><line x1="100" y1="290" x2="100" y2="310"/><line x1="200" y1="290" x2="200" y2="310"/></g>
+      <g id="*DH"><line x1="60" y1="50" x2="60" y2="150"/></g>
+    </defs>
+    <g transform="matrix(1,0,0,-1,0,0)"><g id="*Model_Space">
+      <use href="#*DW" x="0" y="0"/>
+      <use href="#*DH" x="0" y="0"/>
+    </g></g></svg>`;
+}
+
 /** Single-view stack mirroring the real 24081 Sheet_2 nesting: the overall
  *  container zone (internal y[291.5, 891.5], the 50'-0") fully contains the
  *  silencer child (y[531.3, 627.3], the 8'-0"). Probe equipment lines and
