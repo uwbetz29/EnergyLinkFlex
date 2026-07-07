@@ -40,6 +40,10 @@ export function isAnnotationBlockName(href: string): boolean {
  */
 export function isAnnotationElement(el: Element): boolean {
   if (el.tagName === "text") return true;
+  // Real LibreDWG output wraps every entity in its own <g>, so a standalone text
+  // label arrives as <g><text/></g>, never a bare <text>. Hold it rigid too — a
+  // scaled label is a stretched, illegible dimension/callout (bug #3).
+  if (el.tagName === "g" && el.querySelector?.("text")) return true;
   const useEl = el.tagName === "use" ? el : el.querySelector?.("use") ?? null;
   const href =
     useEl?.getAttribute("href") || useEl?.getAttribute("xlink:href") || "";

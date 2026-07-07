@@ -28,4 +28,10 @@ describe("annotation predicate", () => {
     expect(isAnnotationElement(el(`<line x1="0" y1="0" x2="9" y2="9"/>`))).toBe(false);
     expect(isAnnotationElement(el(`<g><path d="M0 0 L9 9"/></g>`))).toBe(false);
   });
+  it("treats a <g>-wrapped text label as annotation (real LibreDWG emits one entity per <g>)", () => {
+    // Model_Space children are ALL <g> in the real drawing — bare <text> never appears,
+    // so a label wrapped in a group must still be held rigid (never scaled/distorted).
+    expect(isAnnotationElement(el(`<g><text x="1" y="2">10'-8"</text></g>`))).toBe(true);
+    expect(isAnnotationElement(el(`<g><text>NEAR SIDE ELEVATION</text></g>`))).toBe(true);
+  });
 });

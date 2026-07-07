@@ -39,6 +39,13 @@ const DEFAULT_MAX_ELEMENTS = 200_000;
 const DEFAULT_MAX_MS = 4_000;
 const MIN_SANE_SCALE = 0.02;
 const MAX_SANE_SCALE = 50;
+/** Tighter "visually corrupt" bound (vs the absurd MIN/MAX_SANE_SCALE last resort):
+ *  a single edit that grows/shrinks a zone past this ratio distorts the neighbours
+ *  sharing that band (round features -> ovals, e.g. a width edit on a stacked
+ *  elevation). The safety net refuses it and warns instead of shipping the smear.
+ *  Real sales edits are almost always < 1.5x; raise this if a legitimate large
+ *  resize needs it. Bug #3 quick-guard; the real fix is per-component scoping. */
+const MAX_STRETCH_RATIO = 2.5;
 
 export interface StretchParams {
   /** Component ID this stretch applies to */
@@ -587,6 +594,11 @@ function checkStretchInvariants(
         // A non-positive scale mirrors or collapses the geometry — visually corrupt,
         // and NOT caught by the viewBox-area check when a concurrent grow dominates.
         if (s <= 0) return `non-positive (mirrored) scale (${s})`;
+        // Gross distortion: a zone scaled past the sane resize ratio smears the
+        // neighbours sharing its band (circles -> ovals). Refuse + roll back so the
+        // user sees the generic warning instead of a corrupt bid drawing.
+        if (s > MAX_STRETCH_RATIO || s < 1 / MAX_STRETCH_RATIO)
+          return `gross distortion: scale ${s.toFixed(2)} exceeds ${MAX_STRETCH_RATIO}x limit`;
         if (s < MIN_SANE_SCALE || s > MAX_SANE_SCALE) return `scale out of bounds (${s})`;
       }
     }
