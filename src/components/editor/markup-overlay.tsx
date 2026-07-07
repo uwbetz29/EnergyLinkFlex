@@ -167,37 +167,37 @@ export function MarkupOverlay({ viewBox, sheetNumber }: MarkupOverlayProps) {
   }, [deleteMarkup]);
 
   /* ─── Commit (Enter/blur) or cancel (Escape) the inline text editor ─── */
+  // NOTE: mutations run in the (event-driven) callback body, NOT inside a
+  // setState updater — updater fns must be pure, and React StrictMode double-
+  // invokes them in dev, which would create every text markup twice.
   const commitTextDraft = useCallback(() => {
-    setTextDraft((d) => {
-      if (!d) return null;
-      const value = d.value.trim();
-      if (value) {
-        if (d.editingId) {
-          updateMarkup(d.editingId, { text: value } as Partial<Markup>);
-        } else {
-          addMarkup({
-            id: newId(sheetNumber, useEditorStore.getState().markups.length),
-            sheetNumber,
-            type: "text",
-            x: d.x,
-            y: d.y,
-            text: value,
-          });
-        }
+    const d = textDraft;
+    if (!d) return;
+    const value = d.value.trim();
+    if (value) {
+      if (d.editingId) {
+        updateMarkup(d.editingId, { text: value } as Partial<Markup>);
+      } else {
+        addMarkup({
+          id: newId(sheetNumber, useEditorStore.getState().markups.length),
+          sheetNumber,
+          type: "text",
+          x: d.x,
+          y: d.y,
+          text: value,
+        });
       }
-      // Empty text is discarded either way (new markup: never created;
-      // existing markup: edit dropped, original text kept).
-      if (!d.editingId) setMarkupTool("select");
-      return null;
-    });
-  }, [addMarkup, updateMarkup, setMarkupTool, sheetNumber]);
+    }
+    // Empty text is discarded either way (new markup: never created;
+    // existing markup: edit dropped, original text kept).
+    if (!d.editingId) setMarkupTool("select");
+    setTextDraft(null);
+  }, [textDraft, addMarkup, updateMarkup, setMarkupTool, sheetNumber]);
 
   const cancelTextDraft = useCallback(() => {
-    setTextDraft((d) => {
-      if (d && !d.editingId) setMarkupTool("select");
-      return null;
-    });
-  }, [setMarkupTool]);
+    if (textDraft && !textDraft.editingId) setMarkupTool("select");
+    setTextDraft(null);
+  }, [textDraft, setMarkupTool]);
 
   /* ─── Pointer handlers on the overlay svg ─── */
   const handlePointerDown = (e: React.PointerEvent<SVGSVGElement>) => {
