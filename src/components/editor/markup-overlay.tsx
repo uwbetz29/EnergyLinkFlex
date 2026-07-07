@@ -270,6 +270,11 @@ export function MarkupOverlay({ viewBox, sheetNumber }: MarkupOverlayProps) {
         style={{
           width: "100%",
           height: "100%",
+          // MUST stay transparent: the drawing SVG injects a document-wide
+          // `svg { background: white }` rule (inline-SVG <style> is not scoped),
+          // which would otherwise paint this overlay white ON TOP of the
+          // drawing and hide it entirely.
+          background: "transparent",
           pointerEvents: active ? "auto" : "none",
           cursor: active ? "crosshair" : undefined,
         }}
