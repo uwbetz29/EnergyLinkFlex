@@ -1582,8 +1582,8 @@ export function SvgDrawingCanvas() {
           }}
         />
 
-        {/* Component region overlays */}
-        {svgLoaded && w > 0 && (
+        {/* Component region overlays — hidden on P&ID (schematic, not resizable) */}
+        {svgLoaded && w > 0 && sheetType !== "PID" && (
           <div
             className="absolute inset-0"
             style={{ pointerEvents: "none" }}

@@ -412,12 +412,15 @@ export function EditorShell() {
 
       {/* ─── Main Area ─── */}
       <div className="flex-1 flex overflow-hidden">
-        {/* Left drawer: component nav + embedded AI configurator */}
-        <aside className="w-[340px] flex-shrink-0 flex flex-col bg-white z-20 overflow-hidden shadow-[4px_0_30px_rgba(0,0,0,0.12)]">
-          {sheetType !== "PID" && <ComponentSidebar />}
-          {/* AI Configurator — natural language dimension modification */}
-          {sheetType !== "PID" && <NLBar />}
-        </aside>
+        {/* Left drawer: component nav + embedded AI configurator.
+            Collapsed entirely on P&ID (not resizable) — no empty panel. */}
+        {sheetType !== "PID" && (
+          <aside className="w-[340px] flex-shrink-0 flex flex-col bg-white z-20 overflow-hidden shadow-[4px_0_30px_rgba(0,0,0,0.12)]">
+            <ComponentSidebar />
+            {/* AI Configurator — natural language dimension modification */}
+            <NLBar />
+          </aside>
+        )}
 
         {drawingType === "dwg" ? <SvgDrawingCanvas /> : <DrawingCanvas />}
       </div>
