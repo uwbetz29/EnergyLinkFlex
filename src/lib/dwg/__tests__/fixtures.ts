@@ -36,6 +36,25 @@ export function makeComponentBandSvg(): string {
     </g></g></svg>`;
 }
 
+/** For U2 cross-band (2D) scoping tests. A horizontal (width) stretch of zone
+ *  X[100,200] targeting cross-band Y[40,60]. Circles exercise the §3 table rows;
+ *  extra circles support a multi-zone case (second zone X[600,700], band Y[240,260]).
+ *  Coords are Model_Space internal (Y-up); the wrapper carries the matrix(1,0,0,-1) flip.
+ *   target  (150,50)  in-band, in-zone    → scale X
+ *   neighbour(150,200) OUT-of-band, in-zone → HELD RIGID (the ovaling test)
+ *   dsInBand (300,50)  in-band, downstream  → translate X by axisGrowth
+ *   dsOutBand(300,200) out-of-band, downstream → translate X by SAME axisGrowth
+ *   upstream (50,50)   in-band, upstream    → identity
+ *   bIn (150,60)  Y at cHi (in-band w/ half-open+tol) → scale; bOut (150,67) > cHi+TOL → held
+ *   mzCross (150,250) in zoneA-X but out zoneA-band, in zoneB-band-Y but not zoneB-X → identity */
+export function makeCrossBandSvg(): string {
+  const c = (id: string, x: number, y: number) => `<circle id="${id}" cx="${x}" cy="${y}" r="5"/>`;
+  return `<svg viewBox="0 -400 900 400" xmlns="http://www.w3.org/2000/svg">
+    <g transform="matrix(1,0,0,-1,0,0)"><g id="*Model_Space">
+      ${c("target", 150, 50)}${c("neighbour", 150, 200)}${c("dsInBand", 300, 50)}${c("dsOutBand", 300, 200)}${c("upstream", 50, 50)}${c("bIn", 150, 60)}${c("bOut", 150, 67)}${c("mzCross", 150, 250)}${c("zoneBhit", 650, 250)}
+    </g></g></svg>`;
+}
+
 /** Single-view stack mirroring the real 24081 Sheet_2 nesting: the overall
  *  container zone (internal y[291.5, 891.5], the 50'-0") fully contains the
  *  silencer child (y[531.3, 627.3], the 8'-0"). Probe equipment lines and
