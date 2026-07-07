@@ -63,6 +63,11 @@ export interface StretchParams {
   delta: number;
   /** Width stretches only: confine the stretch to this X-interval (the edited view). */
   viewRegion?: { xMin: number; xMax: number };
+  /** 2D scoping (U2): confine SCALING to this interval on the CROSS axis (Y for a
+   *  horizontal stretch, X for a vertical one — the cross axis is derived from
+   *  `direction`). Elements outside it are held rigid / translate-only. Undefined =
+   *  today's full-band behaviour (back-compat). */
+  crossBand?: { lo: number; hi: number };
 }
 
 /**
@@ -402,19 +407,20 @@ export function applyMultiStretch(
   // Normalize each stretch to a 1D interval along its axis, in Model_Space coords.
   // vertical: internal Y = -(viewBox Y) due to the matrix(1,0,0,-1) flip.
   type Spec = { axis: "x" | "y"; near: number; far: number; delta: number;
-                viewRegion?: { xMin: number; xMax: number } };
+                viewRegion?: { xMin: number; xMax: number };
+                crossBand?: { lo: number; hi: number } };
   const rawSpecs: Spec[] = [];
   for (const s of stretches) {
     if (s.direction === "vertical") {
       const far = -s.svgBounds.top;      // internal Y increases upward
       const near = -s.svgBounds.bottom;  // near edge = scale origin
       if (far - near <= 0) continue;
-      rawSpecs.push({ axis: "y", near, far, delta: s.delta, viewRegion: s.viewRegion });
+      rawSpecs.push({ axis: "y", near, far, delta: s.delta, viewRegion: s.viewRegion, crossBand: s.crossBand });
     } else {
       const near = s.svgBounds.left;
       const far = s.svgBounds.right;
       if (far - near <= 0) continue;
-      rawSpecs.push({ axis: "x", near, far, delta: s.delta, viewRegion: s.viewRegion });
+      rawSpecs.push({ axis: "x", near, far, delta: s.delta, viewRegion: s.viewRegion, crossBand: s.crossBand });
     }
   }
 
