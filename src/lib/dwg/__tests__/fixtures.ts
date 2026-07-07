@@ -55,6 +55,42 @@ export function makeCrossBandSvg(): string {
     </g></g></svg>`;
 }
 
+/* ─── U3 detached-detection fixtures (dense equipment via loops so inter-element
+ *     spacing doesn't create false corridors; the only wide gap is intentional) ─── */
+const ln = (x: number, y: number) => `<line x1="${x}" y1="${y}" x2="${x + 1}" y2="${y}"/>`;
+const grid = (xs: number[], ys: number[]) => xs.flatMap((x) => ys.map((y) => ln(x, y))).join("");
+const range = (a: number, b: number, step: number) => {
+  const out: number[] = [];
+  for (let v = a; v <= b; v += step) out.push(v);
+  return out;
+};
+const detachedSvg = (mainYs: number[], skidYs: number[]) =>
+  `<svg viewBox="0 -400 100 400" xmlns="http://www.w3.org/2000/svg">
+    <g transform="matrix(1,0,0,-1,0,0)"><g id="*Model_Space">
+      ${grid(range(10, 79, 3), mainYs)}${grid(range(34, 58, 3), skidYs)}
+    </g></g></svg>`;
+
+/** A compact skid Y-separated from the main mass by a WIDE near-empty corridor
+ *  (Y[50,150]) → one high-confidence detached candidate at the skid's bbox. */
+export function makeDetachedSvg(): string {
+  return detachedSvg([30, 50], [150, 165]);
+}
+
+/** Same shape but a NARROW corridor (Y[80,94]) → a detached candidate with
+ *  confidence BELOW CONF_MIN (the caller would WARN, not silently hold). */
+export function makeNarrowDetachedSvg(): string {
+  return detachedSvg(range(20, 80, 5), range(92, 117, 5));
+}
+
+/** A dense uniform grid with NO corridor on either axis → detectDetachedAssemblies
+ *  returns []. */
+export function makeDenseSvg(): string {
+  return `<svg viewBox="0 -100 100 100" xmlns="http://www.w3.org/2000/svg">
+    <g transform="matrix(1,0,0,-1,0,0)"><g id="*Model_Space">
+      ${grid(range(10, 70, 4), range(10, 90, 4))}
+    </g></g></svg>`;
+}
+
 /** Single-view stack mirroring the real 24081 Sheet_2 nesting: the overall
  *  container zone (internal y[291.5, 891.5], the 50'-0") fully contains the
  *  silencer child (y[531.3, 627.3], the 8'-0"). Probe equipment lines and
