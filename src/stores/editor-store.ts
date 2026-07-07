@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import type { DwgComponent, DwgLayer, DwgTitleBlock, DwgSheet } from "@/lib/dwg/types";
+import type { DwgComponent, DwgLayer, DwgTitleBlock, DwgSheet, Markup, MarkupId } from "@/lib/dwg/types";
 import type { SheetType } from "@/lib/dwg/sheet-type";
 import { parseDimInches, formatDimInches } from "@/lib/dwg/svg-stretch";
 
@@ -131,6 +131,17 @@ export interface EditorState {
   /* Multi-sheet actions */
   setSheets: (sheets: DwgSheet[]) => void;
   setActiveSheet: (index: number) => void;
+
+  /* Markup (red annotation layer) */
+  markups: Markup[];
+  selectedMarkupId: MarkupId | null;
+  markupTool: "pan" | "select" | "line" | "arrow" | "text";
+  addMarkup: (m: Markup) => void;
+  updateMarkup: (id: MarkupId, patch: Partial<Markup>) => void;
+  deleteMarkup: (id: MarkupId) => void;
+  selectMarkup: (id: MarkupId | null) => void;
+  setMarkupTool: (t: EditorState["markupTool"]) => void;
+  setMarkups: (m: Markup[]) => void; // hydrate on load
 }
 
 /* ─── Helpers ─── */
@@ -180,6 +191,9 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   panX: 0,
   panY: 0,
 
+  markups: [],
+  selectedMarkupId: null,
+  markupTool: "pan",
 
   setProject: (id, name) => set({ projectId: id, projectName: name }),
   setDrawingType: (type) => set({ drawingType: type }),
@@ -452,4 +466,20 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       sheetType: sheet.sheetType ?? "GA",
     });
   },
+
+  /* ─── Markup (red annotation layer) ─── */
+
+  addMarkup: (m) => set((s) => ({ markups: [...s.markups, m] })),
+  updateMarkup: (id, patch) =>
+    set((s) => ({
+      markups: s.markups.map((m) => (m.id === id ? ({ ...m, ...patch } as Markup) : m)),
+    })),
+  deleteMarkup: (id) =>
+    set((s) => ({
+      markups: s.markups.filter((m) => m.id !== id),
+      selectedMarkupId: s.selectedMarkupId === id ? null : s.selectedMarkupId,
+    })),
+  selectMarkup: (id) => set({ selectedMarkupId: id }),
+  setMarkupTool: (t) => set({ markupTool: t }),
+  setMarkups: (m) => set({ markups: m }),
 }));
