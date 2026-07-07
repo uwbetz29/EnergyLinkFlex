@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { useEditorStore } from "@/stores/editor-store";
 import { TITAN_PGM130_COMPONENTS } from "./component-data";
@@ -16,6 +16,24 @@ import { toEditorComponents, parseSvgViewBox } from "@/lib/dwg/extractor";
 import type { AiSection } from "@/lib/ai/prescan";
 import type { ComponentDef } from "@/stores/editor-store";
 import type { SheetType } from "@/lib/dwg/sheet-type";
+import type { Markup } from "@/lib/dwg/types";
+
+/** Flatten a per-sheet markup map (as stored in the DB) into the flat store array. */
+function flattenMarkups(
+  bySheet: Record<number, Markup[]> | null | undefined
+): Markup[] {
+  return bySheet ? Object.values(bySheet).flat() : [];
+}
+
+/** Group the flat store array back into a per-sheet map for persistence. */
+function groupMarkupsBySheet(markups: Markup[]): Record<number, Markup[]> {
+  return markups.reduce((acc, m) => {
+    (acc[m.sheetNumber] ??= []).push(m);
+    return acc;
+  }, {} as Record<number, Markup[]>);
+}
+
+const MARKUP_SAVE_DEBOUNCE_MS = 800;
 
 /** Convert AI pre-scan sections into editor ComponentDefs */
 function aiSectionsToComponents(
@@ -64,10 +82,25 @@ export function EditorShell() {
     setSheets,
     setSheetType,
     setActiveSheet,
+    setMarkups,
   } = useEditorStore();
+  const markups = useEditorStore((s) => s.markups);
 
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+
+  // Guards the markup-save effect against two failure modes:
+  //  1. Saving on mount before hydrate has completed (projectId is set but
+  //     the store's markups are still the pre-load default / stale from a
+  //     previous project) — gated by `projectId` not yet matching.
+  //  2. Saving immediately after hydrate, which would PATCH back the exact
+  //     data we just loaded — gated by `skipNextSave`, set right alongside
+  //     the hydrating `setMarkups()` call and consumed by the very next
+  //     save-effect run.
+  const markupHydration = useRef<{ projectId: string | null; skipNextSave: boolean }>({
+    projectId: null,
+    skipNextSave: false,
+  });
 
   useEffect(() => {
     if (!projectId) {
@@ -92,6 +125,12 @@ export function EditorShell() {
 
         setProject(project.id, project.name);
         setDrawingType(project.drawing_type);
+
+        // Hydrate markups from the persisted per-sheet blob. Arm the
+        // just-hydrated guard so the save effect below doesn't immediately
+        // PATCH this same data back to the server.
+        markupHydration.current = { projectId: project.id, skipNextSave: true };
+        setMarkups(flattenMarkups(project.dwg_markups));
 
         if (project.drawing_type === "dwg") {
           // Multi-sheet DWG: load all sheets if available
@@ -201,7 +240,46 @@ export function EditorShell() {
     return () => {
       cancelled = true;
     };
-  }, [projectId, setPdfUrl, setSvgUrl, setProject, setComponents, setDrawingType, setDwgData, setSheets, setSheetType]);
+  }, [projectId, setPdfUrl, setSvgUrl, setProject, setComponents, setDrawingType, setDwgData, setSheets, setSheetType, setMarkups]);
+
+  // Debounced markup persistence. Markup-only — dimension edits are handled
+  // by a separate mechanism and must not be touched here.
+  useEffect(() => {
+    if (!projectId) return;
+
+    const hydration = markupHydration.current;
+
+    if (hydration.projectId !== projectId) {
+      // Hydrate for this projectId hasn't completed yet (covers both the
+      // initial mount, before the load resolves, and the gap right after
+      // switching projects). Never save markups we haven't confirmed came
+      // from a completed load — otherwise a slow load could PATCH an empty
+      // (or stale, previous-project) markup set over real saved data.
+      return;
+    }
+
+    if (hydration.skipNextSave) {
+      // This run corresponds to the setMarkups() call made during hydrate.
+      // Consume the flag so subsequent real edits are saved normally.
+      hydration.skipNextSave = false;
+      return;
+    }
+
+    const timer = setTimeout(() => {
+      fetch("/api/dwg/markups", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          projectId,
+          markupsBySheet: groupMarkupsBySheet(markups),
+        }),
+      }).catch((err) => {
+        console.error("[ELF] Failed to save markups", err);
+      });
+    }, MARKUP_SAVE_DEBOUNCE_MS);
+
+    return () => clearTimeout(timer);
+  }, [markups, projectId]);
 
   if (loading) {
     return (
