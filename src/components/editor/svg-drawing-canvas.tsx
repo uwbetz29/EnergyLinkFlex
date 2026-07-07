@@ -20,6 +20,7 @@ import { isAnnotationBlockName, stripAnnotationUses } from "@/lib/dwg/annotation
 import { getDimBlockBounds, dimBlockBox2D, computeComponentBand } from "@/lib/dwg/dim-geometry";
 import { detectDetachedAssemblies, CONF_MIN } from "@/lib/dwg/detached";
 import type { ComponentDef } from "@/stores/editor-store";
+import { MarkupOverlay } from "./markup-overlay";
 
 /* ─── Constants ─── */
 
@@ -500,6 +501,7 @@ export function SvgDrawingCanvas() {
     svgViewBox,
     stretchWarning,
     sheetType,
+    currentSheet,
     select,
     setZoom,
     setPan,
@@ -1736,6 +1738,18 @@ export function SvgDrawingCanvas() {
               );
             })}
           </div>
+        )}
+
+        {/* Red markup overlay (line/arrow/text annotations) — sibling INSIDE
+            the same zoom/pan-transformed wrapper so it inherits the drawing's
+            transform for free. Mounted after the drawing + component overlays
+            so it stacks on top. All sheets (GA + P&ID), independent of the
+            resize gate. */}
+        {svgLoaded && svgViewBox && (
+          <MarkupOverlay
+            viewBox={`${svgViewBox.minX} ${svgViewBox.minY} ${svgViewBox.width} ${svgViewBox.height}`}
+            sheetNumber={currentSheet}
+          />
         )}
       </div>
 
