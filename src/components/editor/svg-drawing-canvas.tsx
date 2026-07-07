@@ -21,6 +21,7 @@ import { getDimBlockBounds, dimBlockBox2D, computeComponentBand } from "@/lib/dw
 import { detectDetachedAssemblies, CONF_MIN } from "@/lib/dwg/detached";
 import type { ComponentDef } from "@/stores/editor-store";
 import { MarkupOverlay } from "./markup-overlay";
+import { MarkupToolbar } from "./markup-toolbar";
 
 /* ─── Constants ─── */
 
@@ -1825,6 +1826,11 @@ export function SvgDrawingCanvas() {
           </button>
         </div>
       </div>
+
+      {/* Markup toolbar (pan/select/line/arrow/text) — top-right, opposite the
+          zoom cluster. Visible on all sheets (GA + P&ID); markups are not
+          gated on sheetType. */}
+      <MarkupToolbar />
 
       {/* SVG Minimap */}
       {svgLoaded && w > 0 && (
