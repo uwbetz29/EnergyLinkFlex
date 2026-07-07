@@ -499,6 +499,7 @@ export function SvgDrawingCanvas() {
     originals,
     svgViewBox,
     stretchWarning,
+    sheetType,
     select,
     setZoom,
     setPan,
@@ -564,7 +565,10 @@ export function SvgDrawingCanvas() {
 
           setSvgLoaded(true);
           saveOriginalViewBox(svgEl);
-          requestAnimationFrame(() => setupDimensionClicks(svgEl));
+          // P&ID sheets are not resizable: skip wiring clickable dimension blocks.
+          if (sheetType !== "PID") {
+            requestAnimationFrame(() => setupDimensionClicks(svgEl));
+          }
         }
       } catch (err) {
         console.error("Failed to load SVG:", err);
@@ -1592,6 +1596,16 @@ export function SvgDrawingCanvas() {
           >
             {"✕"}
           </button>
+        </div>
+      )}
+
+      {/* P&ID sheets are not resizable: static badge, no dismiss */}
+      {sheetType === "PID" && (
+        <div
+          className="absolute top-3 left-1/2 -translate-x-1/2 z-30 px-4 py-2 rounded-xl
+                      bg-slate-100 border border-slate-300 text-slate-600 text-[12px] font-semibold shadow-md"
+        >
+          {"P&ID — not resizable"}
         </div>
       )}
 

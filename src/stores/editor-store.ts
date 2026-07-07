@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import type { DwgComponent, DwgLayer, DwgTitleBlock, DwgSheet } from "@/lib/dwg/types";
+import type { SheetType } from "@/lib/dwg/sheet-type";
 import { parseDimInches, formatDimInches } from "@/lib/dwg/svg-stretch";
 
 /* ─── Types ─── */
@@ -50,6 +51,10 @@ export interface EditorState {
   /* Multi-sheet DWG */
   sheets: DwgSheet[];
   activeSheetIndex: number;
+
+  /** Sheet-type classification ("GA" | "PID") for the active sheet; drives resize-UI gating. */
+  sheetType: SheetType;
+  setSheetType: (t: SheetType) => void;
 
   /* DWG data */
   dwgComponents: DwgComponent[];
@@ -146,6 +151,8 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   sheets: [],
   activeSheetIndex: 0,
 
+  sheetType: "GA" as SheetType,
+
   dwgComponents: [],
   dwgLayers: [],
   dwgMetadata: null,
@@ -179,6 +186,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   setPdfUrl: (url) => set({ pdfUrl: url }),
   setSvgUrl: (url) => set({ svgUrl: url }),
   setSheet: (n) => set({ currentSheet: n }),
+  setSheetType: (t) => set({ sheetType: t }),
   setComponents: (comps) => set({ components: comps }),
   setDwgData: (components, layers, metadata) => {
     // Auto-hide non-essential layers for cleaner sales view
@@ -441,6 +449,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       dwgLayers: sheet.layers,
       dwgMetadata: sheet.metadata ?? null,
       visibleLayers: visible,
+      sheetType: sheet.sheetType ?? "GA",
     });
   },
 }));

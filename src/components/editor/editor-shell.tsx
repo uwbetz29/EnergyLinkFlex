@@ -15,6 +15,7 @@ import { getProject } from "@/app/projects/actions";
 import { toEditorComponents, parseSvgViewBox } from "@/lib/dwg/extractor";
 import type { AiSection } from "@/lib/ai/prescan";
 import type { ComponentDef } from "@/stores/editor-store";
+import type { SheetType } from "@/lib/dwg/sheet-type";
 
 /** Convert AI pre-scan sections into editor ComponentDefs */
 function aiSectionsToComponents(
@@ -53,6 +54,7 @@ export function EditorShell() {
     drawingType,
     sheets,
     activeSheetIndex,
+    sheetType,
     setComponents,
     setPdfUrl,
     setSvgUrl,
@@ -60,6 +62,7 @@ export function EditorShell() {
     setDrawingType,
     setDwgData,
     setSheets,
+    setSheetType,
     setActiveSheet,
   } = useEditorStore();
 
@@ -97,6 +100,7 @@ export function EditorShell() {
             // setActiveSheet(0) is called inside setSheets,
             // which sets svgUrl, components, layers, etc. for sheet 0
             const firstSheet = project.dwg_sheets[0];
+            setSheetType(firstSheet.sheetType ?? "GA");
 
             // Convert first sheet's components to editor ComponentDefs
             let viewBox = { minX: 0, minY: 0, width: 1600, height: 900 };
@@ -125,6 +129,7 @@ export function EditorShell() {
             useEditorStore.getState().toggleOverlays();
           } else {
             // Single-sheet DWG (backward compat)
+            setSheetType((project.dwg_sheet_type as SheetType) ?? "GA");
             if (project.svg_url) {
               setSvgUrl(project.svg_url);
             }
@@ -196,7 +201,7 @@ export function EditorShell() {
     return () => {
       cancelled = true;
     };
-  }, [projectId, setPdfUrl, setSvgUrl, setProject, setComponents, setDrawingType, setDwgData, setSheets]);
+  }, [projectId, setPdfUrl, setSvgUrl, setProject, setComponents, setDrawingType, setDwgData, setSheets, setSheetType]);
 
   if (loading) {
     return (
@@ -331,9 +336,9 @@ export function EditorShell() {
       <div className="flex-1 flex overflow-hidden">
         {/* Left drawer: component nav + embedded AI configurator */}
         <aside className="w-[340px] flex-shrink-0 flex flex-col bg-white z-20 overflow-hidden shadow-[4px_0_30px_rgba(0,0,0,0.12)]">
-          <ComponentSidebar />
+          {sheetType !== "PID" && <ComponentSidebar />}
           {/* AI Configurator — natural language dimension modification */}
-          <NLBar />
+          {sheetType !== "PID" && <NLBar />}
         </aside>
 
         {drawingType === "dwg" ? <SvgDrawingCanvas /> : <DrawingCanvas />}
