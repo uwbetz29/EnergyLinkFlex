@@ -101,10 +101,14 @@ const near = (a, b, tol = 1e-3) => Math.abs(a - b) < tol;
   const h1 = svg.getAttribute("viewBox").split(/\s+/).map(Number)[3];
   // total grows by 48 (the edited overall), NOT 72 (the double-counted 48+24).
   check(near(h1 - h0, 48, 1e-3), `total grew 48 not 72 — no double-count (${(h1 - h0).toFixed(2)})`);
-  // silencer still scales 1.25 (its own +24 over 96).
+  // silencer EQUIPMENT still scales 1.25 (its own +24 over 96). Companion
+  // annotations are correctly HELD rigid (scale 1) under the residual edit, so
+  // exclude them — exactly as the redistribute band() filter above does. Without
+  // this guard the single annotation <g> in the silencer band (held at 1) fails a
+  // blanket .every(1.25) even though every one of the 47 equipment elements scales.
   const kids = Array.from(findModelSpace(svg).children);
-  const silEq = kids.filter((k) => { const p = fastPosition(k); return p && p.y > 550 && p.y < 610; });
-  check(silEq.length > 0 && silEq.every((k) => near(syOf(k), (96 + 24) / 96)), `silencer scales 1.25 under resolved edit (n=${silEq.length})`);
+  const silEq = kids.filter((k) => { const p = fastPosition(k); return p && !isAnnotationElement(k) && p.y > 550 && p.y < 610; });
+  check(silEq.length > 0 && silEq.every((k) => near(syOf(k), (96 + 24) / 96)), `silencer equipment scales 1.25 under resolved edit (n=${silEq.length})`);
 }
 
 // ── Undo restores geometry + viewBox with zero leftover markers ──
