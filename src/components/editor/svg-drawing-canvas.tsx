@@ -17,6 +17,7 @@ import {
 import type { StretchParams } from "@/lib/dwg/svg-stretch";
 import { computeViewRegions, viewOf } from "@/lib/dwg/view-model";
 import { isAnnotationBlockName, stripAnnotationUses } from "@/lib/dwg/annotations";
+import { dampenHatch } from "@/lib/dwg/hatch";
 import { getDimBlockBounds, dimBlockBox2D, computeComponentBand } from "@/lib/dwg/dim-geometry";
 import { detectDetachedAssemblies, CONF_MIN } from "@/lib/dwg/detached";
 import type { ComponentDef } from "@/stores/editor-store";
@@ -164,7 +165,10 @@ const HIDDEN_LAYERS = new Set([
 ]);
 
 function processLibreDwgSvg(svgText: string): string {
-  return stripAnnotationUses(svgText)
+  // Dampen exploded HATCH fill (thousands of sub-unit segments that flood black
+  // at low zoom) to a faint gray BEFORE the white->black recolor, so real
+  // geometry stays black and hatch recedes to texture.
+  return dampenHatch(stripAnnotationUses(svgText))
     // Strip annotation-clutter <use>s (CriticalFeature blobs, borders, title/datum
     // symbols) at the source above, so no later stretch/undo/re-render can revive them
     // — the DOM-level display:none hide in postProcessSvgDom didn't stick at runtime.
@@ -181,21 +185,29 @@ function processLibreDwgSvg(svgText: string): string {
     // Belt-and-suspenders: CSS alone doesn't reliably penetrate <use> shadow DOM.
     .replace(/<(line|circle|ellipse|path|rect|polygon|polyline)\s/g,
       '<$1 fill="none" vector-effect="non-scaling-stroke" ')
-    // Inject CSS fixes after opening <svg> tag
-    .replace(
-      /(<svg[^>]*>)/,
-      `$1<style>
-        svg { background: white; }
+    // Inject CSS fixes after the opening <svg> tag. SCOPED to `.elf-dwg`:
+    // inline-SVG <style> is NOT scoped to its own SVG — a bare `svg`/`text`/`line`
+    // selector leaks document-wide and hits the markup overlay (that leak is why
+    // markup text rendered black + arrowheads went hollow, and why the overlay
+    // once painted white over the drawing). Tagging the drawing svg + prefixing
+    // every selector confines these rules to the drawing.
+    .replace(/(<svg\b[^>]*>)/, (svgTag) => {
+      const tagged = /\bclass\s*=\s*("|')/.test(svgTag)
+        ? svgTag.replace(/\bclass\s*=\s*("|')/, `class=$1elf-dwg `)
+        : svgTag.replace(/^<svg\b/, `<svg class="elf-dwg"`);
+      return `${tagged}<style>
+        .elf-dwg { background: white; }
         /* Triple-layer fill fix: presentation attr + CSS + inheritance */
-        line, circle, ellipse, path, polygon, polyline, rect {
+        .elf-dwg line, .elf-dwg circle, .elf-dwg ellipse, .elf-dwg path,
+        .elf-dwg polygon, .elf-dwg polyline, .elf-dwg rect {
           fill: none !important;
           vector-effect: non-scaling-stroke !important;
         }
-        text { fill: rgb(0,0,0) !important; }
-        defs g { fill: none; }
-        use { fill: none; }
-      </style>`
-    );
+        .elf-dwg text { fill: rgb(0,0,0) !important; }
+        .elf-dwg defs g { fill: none; }
+        .elf-dwg use { fill: none; }
+      </style>`;
+    });
 }
 
 /** Post-process the SVG DOM after injection to hide annotation clutter
@@ -258,8 +270,31 @@ function DimensionEditor({
   const feetRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
+    // Reliable autofocus — .select() alone sometimes leaves focus on <body>,
+    // which is why Esc/Enter (input-scoped handlers) did nothing and the popup
+    // got stuck. Also add global Escape + click-outside dismiss as fallbacks
+    // that work regardless of where focus lands.
+    feetRef.current?.focus();
     feetRef.current?.select();
-  }, []);
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        onCancel();
+      }
+    };
+    const onDown = (e: MouseEvent) => {
+      const editor = document.querySelector("[data-dim-editor]");
+      if (editor && e.target instanceof Node && !editor.contains(e.target)) {
+        onCancel();
+      }
+    };
+    window.addEventListener("keydown", onKey, true);
+    window.addEventListener("mousedown", onDown, true);
+    return () => {
+      window.removeEventListener("keydown", onKey, true);
+      window.removeEventListener("mousedown", onDown, true);
+    };
+  }, [onCancel]);
 
   const handleSubmit = () => {
     onSubmit(formatDimText(feet, inches, fraction));
@@ -288,13 +323,25 @@ function DimensionEditor({
         style={{ boxShadow: "0 4px 24px rgba(0,0,0,0.15)" }}
         data-dim-editor
       >
-        <div className="text-[9px] font-semibold text-blue-500/70 uppercase tracking-wider mb-1.5">
-          Edit Dimension
+        <div className="flex items-center justify-between mb-1.5">
+          <div className="text-[9px] font-semibold text-blue-500/70 uppercase tracking-wider">
+            Edit Dimension
+          </div>
+          <button
+            type="button"
+            onClick={onCancel}
+            aria-label="Close"
+            className="text-gray-400 hover:text-gray-700 text-[13px] leading-none px-1 -mr-1"
+          >
+            {"✕"}
+          </button>
         </div>
         <div className="flex items-center gap-1.5">
           {/* Feet */}
           <input
             ref={feetRef}
+            autoFocus
+            aria-label="Feet"
             type="number"
             min={0}
             max={999}
@@ -472,6 +519,7 @@ function SvgMinimap({
 
 export function SvgDrawingCanvas() {
   const svgContainerRef = useRef<HTMLDivElement>(null);
+  const compOverlayRef = useRef<HTMLDivElement>(null);
   const wrapRef = useRef<HTMLDivElement>(null);
   const [svgSize, setSvgSize] = useState({ w: 0, h: 0 });
   const [svgLoaded, setSvgLoaded] = useState(false);
@@ -502,6 +550,7 @@ export function SvgDrawingCanvas() {
     svgViewBox,
     stretchWarning,
     sheetType,
+    markupTool,
     currentSheet,
     select,
     setZoom,
@@ -509,6 +558,33 @@ export function SvgDrawingCanvas() {
     setSvgViewBox,
     setStretchWarning,
   } = useEditorStore();
+
+  /* ─── Resolve which component a click selects when boxes overlap ───
+     Recompute from geometry (not paint order): pick the SMALLEST box that
+     contains the point; clicking again on the same stack cycles outward to
+     progressively larger boxes. Reaches components occluded by a bigger one. */
+  function selectComponentAtPoint(clientX: number, clientY: number) {
+    const r = compOverlayRef.current?.getBoundingClientRect();
+    if (!r || r.width === 0 || r.height === 0) return;
+    const px = ((clientX - r.left) / r.width) * 100; // box coords are % of this container
+    const py = ((clientY - r.top) / r.height) * 100;
+    const hits = Object.values(components)
+      .filter((c) => !hiddenComponents.has(c.id))
+      .filter(
+        (c) =>
+          px >= c.box[0] &&
+          px <= c.box[0] + c.box[2] &&
+          py >= c.box[1] &&
+          py <= c.box[1] + c.box[3]
+      )
+      .sort((a, b) => a.box[2] * a.box[3] - b.box[2] * b.box[3]); // area ascending
+    if (hits.length === 0) {
+      select(null);
+      return;
+    }
+    const cur = hits.findIndex((c) => c.id === selectedId);
+    select(hits[cur === -1 ? 0 : (cur + 1) % hits.length].id);
+  }
 
   /* ─── Load SVG with direct color replacement ─── */
   useEffect(() => {
@@ -1585,6 +1661,7 @@ export function SvgDrawingCanvas() {
         {/* Component region overlays — hidden on P&ID (schematic, not resizable) */}
         {svgLoaded && w > 0 && sheetType !== "PID" && (
           <div
+            ref={compOverlayRef}
             className="absolute inset-0"
             style={{ pointerEvents: "none" }}
           >
@@ -1600,7 +1677,7 @@ export function SvgDrawingCanvas() {
                   data-comp-overlay
                   onClick={(e) => {
                     e.stopPropagation();
-                    select(comp.id);
+                    selectComponentAtPoint(e.clientX, e.clientY);
                   }}
                   style={{
                     position: "absolute",
@@ -1623,7 +1700,9 @@ export function SvgDrawingCanvas() {
                       : "none",
                     borderRadius: 4,
                     cursor: "pointer",
-                    pointerEvents: "auto",
+                    // Pass-through when a markup tool is active so the markup
+                    // overlay (on top) receives the click instead of a box.
+                    pointerEvents: markupTool === "pan" ? "auto" : "none",
                     transition:
                       "border 0.2s, background 0.2s, box-shadow 0.2s",
                     zIndex: isSelected ? 5 : 1,

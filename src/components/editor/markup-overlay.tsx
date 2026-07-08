@@ -190,12 +190,12 @@ export function MarkupOverlay({ viewBox, sheetNumber }: MarkupOverlayProps) {
     }
     // Empty text is discarded either way (new markup: never created;
     // existing markup: edit dropped, original text kept).
-    if (!d.editingId) setMarkupTool("select");
+    if (!d.editingId) setMarkupTool("pan");
     setTextDraft(null);
   }, [textDraft, addMarkup, updateMarkup, setMarkupTool, sheetNumber]);
 
   const cancelTextDraft = useCallback(() => {
-    if (textDraft && !textDraft.editingId) setMarkupTool("select");
+    if (textDraft && !textDraft.editingId) setMarkupTool("pan");
     setTextDraft(null);
   }, [textDraft, setMarkupTool]);
 
@@ -215,8 +215,12 @@ export function MarkupOverlay({ viewBox, sheetNumber }: MarkupOverlayProps) {
       return;
     }
 
-    // Select tool
-    const id = hitTest(sheetMarkups, pt, HIT_TOL);
+    // Select tool. Convert a fixed ~8px screen target into viewBox units via
+    // the live CTM so thin lines stay clickable at any zoom (HIT_TOL alone is
+    // in viewBox units and shrinks on screen as you zoom out).
+    const pxPerUnit = svgRef.current?.getScreenCTM()?.a || 1;
+    const tol = Math.max(HIT_TOL, 8 / pxPerUnit);
+    const id = hitTest(sheetMarkups, pt, tol);
     selectMarkup(id);
     if (id) {
       e.currentTarget.setPointerCapture(e.pointerId);
@@ -254,7 +258,9 @@ export function MarkupOverlay({ viewBox, sheetNumber }: MarkupOverlayProps) {
           type: markupTool,
           ...seg,
         });
-        setMarkupTool("select");
+        // Return to pan so the overlay becomes pass-through again — otherwise
+        // it keeps eating clicks and dimension/component selection dies.
+        setMarkupTool("pan");
       }
       setDraft(null);
     }
@@ -275,6 +281,9 @@ export function MarkupOverlay({ viewBox, sheetNumber }: MarkupOverlayProps) {
           // which would otherwise paint this overlay white ON TOP of the
           // drawing and hide it entirely.
           background: "transparent",
+          // When a markup tool is active, sit above the component boxes (max z:5)
+          // so markup clicks aren't stolen by them; below the text <input> (z:20).
+          zIndex: active ? 10 : undefined,
           pointerEvents: active ? "auto" : "none",
           cursor: active ? "crosshair" : undefined,
         }}
