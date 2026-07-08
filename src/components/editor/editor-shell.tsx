@@ -9,9 +9,11 @@ import { SvgDrawingCanvas } from "./svg-drawing-canvas";
 import { ComponentSidebar } from "./component-sidebar";
 import { NLBar } from "./nl-bar";
 import { StageNav } from "./stage-nav";
+import { ChangeLedgerPanel } from "./change-ledger-panel";
 import Link from "next/link";
-import { ArrowLeft, Undo2, Redo2, Download, Loader2, Layers, Check } from "lucide-react";
+import { ArrowLeft, Undo2, Redo2, Download, Loader2, Layers, Check, FileText, Image as ImageIcon, Package } from "lucide-react";
 import { getProject } from "@/app/projects/actions";
+import { exportDrawingPdf, exportDrawingPng, exportBidPackage, type ExportOptions } from "@/lib/dwg/drawing-export";
 import { toEditorComponents, parseSvgViewBox } from "@/lib/dwg/extractor";
 import type { AiSection } from "@/lib/ai/prescan";
 import type { ComponentDef } from "@/stores/editor-store";
@@ -112,12 +114,20 @@ export function EditorShell() {
   const markups = useEditorStore((s) => s.markups);
   const components = useEditorStore((s) => s.components);
   const originals = useEditorStore((s) => s.originals);
+  const dwgMetadata = useEditorStore((s) => s.dwgMetadata);
+  const svgViewBox = useEditorStore((s) => s.svgViewBox);
   const canUndo = historyIndex >= 0;
   const canRedo = historyIndex < history.length - 1;
 
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [saveState, setSaveState] = useState<SaveState>("idle");
+  const [exporting, setExporting] = useState(false);
+  const [exportMenuOpen, setExportMenuOpen] = useState(false);
+  const [exportError, setExportError] = useState<string | null>(null);
+  // Export needs the live DWG svg + its viewBox; disabled for PDF projects
+  // (no `.elf-dwg` drawing) or before the drawing has loaded.
+  const canExport = drawingType === "dwg" && !!svgViewBox;
   // Set once the initial load for this projectId has finished applying any
   // persisted dim edits, so the save effect never fires mid-load.
   const dimHydratedFor = useRef<string | null>(null);
@@ -372,6 +382,71 @@ export function EditorShell() {
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [undo, redo]);
 
+  // Auto-clear a transient export error after a few seconds.
+  useEffect(() => {
+    if (!exportError) return;
+    const t = setTimeout(() => setExportError(null), 4000);
+    return () => clearTimeout(t);
+  }, [exportError]);
+
+  // Serialize the LIVE drawing (current stretches) + red markup overlay to a
+  // PNG or a branded PDF. Reads the two on-screen svgs by their data-hooks so
+  // the export is a snapshot of exactly what's rendered.
+  async function handleExport(format: "pdf" | "png" | "bid") {
+    setExportMenuOpen(false);
+    const drawingSvg = document.querySelector<SVGSVGElement>(
+      "[data-elf-canvas] > svg"
+    );
+    const markupSvg = document.querySelector<SVGSVGElement>("[data-elf-markup]");
+    if (!drawingSvg || !svgViewBox) {
+      setExportError("No drawing to export yet.");
+      return;
+    }
+    setExporting(true);
+    setExportError(null);
+    try {
+      const opts: ExportOptions = {
+        drawingSvg,
+        markupSvg,
+        viewBox: { width: svgViewBox.width, height: svgViewBox.height },
+        metadata: dwgMetadata,
+        projectName,
+        date: new Date(),
+        components,
+        originals,
+      };
+      if (format === "pdf") await exportDrawingPdf(opts);
+      else if (format === "png") await exportDrawingPng(opts);
+      else await exportBidPackage(opts);
+    } catch (err) {
+      console.error("[ELF] Export failed", err);
+      setExportError("Export failed. Try again.");
+    } finally {
+      setExporting(false);
+    }
+  }
+
+  // Switch to a multi-sheet DWG's Nth sheet: activate it, then rebuild the
+  // component overlays against the sheet's REAL parsed viewBox (previously a
+  // hardcoded 1600×900, which mis-placed the boxes until deriveComponentBoxes ran).
+  async function switchSheet(idx: number) {
+    setActiveSheet(idx);
+    const s = sheets[idx];
+    let viewBox = { minX: 0, minY: 0, width: 1600, height: 900 };
+    if (s.svgUrl) {
+      try {
+        const res = await fetch(s.svgUrl, { headers: { Range: "bytes=0-500" } });
+        viewBox = parseSvgViewBox(await res.text());
+      } catch {
+        // keep the default viewBox
+      }
+    }
+    // Bail if the user switched to another sheet while we were fetching — a slow
+    // fetch must not overwrite a newer sheet's components (stale-write race).
+    if (useEditorStore.getState().activeSheetIndex !== idx) return;
+    setComponents(toEditorComponents(s.components, viewBox));
+  }
+
   if (loading) {
     return (
       <div className="flex flex-col h-screen items-center justify-center bg-[#f0f0f4]">
@@ -457,6 +532,7 @@ export function EditorShell() {
               )}
             </span>
           )}
+          {drawingType === "dwg" && <ChangeLedgerPanel />}
           <button
             onClick={undo}
             disabled={!canUndo}
@@ -475,15 +551,79 @@ export function EditorShell() {
             <Redo2 className="w-3 h-3" />
             Redo
           </button>
-          <button className="px-3 py-1.5 rounded-[7px] text-[11px] font-bold bg-white text-[#002e81] hover:bg-[#e6eeff] transition-all flex items-center gap-1.5">
-            <Download className="w-3 h-3" />
-            Export
-            {changeCount > 0 && (
-              <span className="bg-[#002e81] text-white text-[9px] px-1.5 py-0.5 rounded-full font-bold">
-                {changeCount}
-              </span>
+          {exportError && (
+            <span className="text-[10px] font-semibold text-red-300 mr-1">
+              {exportError}
+            </span>
+          )}
+          <div className="relative">
+            <button
+              onClick={() => setExportMenuOpen((v) => !v)}
+              disabled={!canExport || exporting}
+              title={canExport ? "Export drawing" : "No DWG drawing to export"}
+              className="px-3 py-1.5 rounded-[7px] text-[11px] font-bold bg-white text-[#002e81] hover:bg-[#e6eeff] transition-all flex items-center gap-1.5 disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              {exporting ? (
+                <Loader2 className="w-3 h-3 animate-spin" />
+              ) : (
+                <Download className="w-3 h-3" />
+              )}
+              {exporting ? "Exporting…" : "Export"}
+              {changeCount > 0 && !exporting && (
+                <span className="bg-[#002e81] text-white text-[9px] px-1.5 py-0.5 rounded-full font-bold">
+                  {changeCount}
+                </span>
+              )}
+            </button>
+            {exportMenuOpen && (
+              <>
+                {/* Click-away backdrop */}
+                <div
+                  className="fixed inset-0 z-40"
+                  onClick={() => setExportMenuOpen(false)}
+                />
+                <div className="absolute right-0 top-full mt-1.5 z-50 w-52 rounded-lg bg-white shadow-xl border border-gray-200 py-1 overflow-hidden">
+                  <button
+                    onClick={() => handleExport("bid")}
+                    className="w-full px-3 py-2 text-left text-[12px] font-semibold text-gray-700 hover:bg-blue-50 hover:text-[#002e81] transition-colors flex items-center gap-2.5"
+                  >
+                    <Package className="w-3.5 h-3.5" />
+                    <span className="flex flex-col">
+                      Bid Package
+                      <span className="text-[9px] font-normal text-gray-400">
+                        Drawing + change summary
+                      </span>
+                    </span>
+                  </button>
+                  <div className="h-px bg-gray-100 mx-2 my-1" />
+                  <button
+                    onClick={() => handleExport("pdf")}
+                    className="w-full px-3 py-2 text-left text-[12px] font-semibold text-gray-700 hover:bg-blue-50 hover:text-[#002e81] transition-colors flex items-center gap-2.5"
+                  >
+                    <FileText className="w-3.5 h-3.5" />
+                    <span className="flex flex-col">
+                      Branded PDF
+                      <span className="text-[9px] font-normal text-gray-400">
+                        With title block
+                      </span>
+                    </span>
+                  </button>
+                  <button
+                    onClick={() => handleExport("png")}
+                    className="w-full px-3 py-2 text-left text-[12px] font-semibold text-gray-700 hover:bg-blue-50 hover:text-[#002e81] transition-colors flex items-center gap-2.5"
+                  >
+                    <ImageIcon className="w-3.5 h-3.5" />
+                    <span className="flex flex-col">
+                      PNG image
+                      <span className="text-[9px] font-normal text-gray-400">
+                        Drawing + markups
+                      </span>
+                    </span>
+                  </button>
+                </div>
+              </>
             )}
-          </button>
+          </div>
         </div>
       </div>
 
@@ -503,16 +643,7 @@ export function EditorShell() {
               <button
                 key={sheet.sheetNumber}
                 onClick={() => {
-                  if (!isActive) {
-                    setActiveSheet(idx);
-                    // Re-convert components for the new sheet
-                    const s = sheets[idx];
-                    const editorComps = toEditorComponents(
-                      s.components,
-                      { minX: 0, minY: 0, width: 1600, height: 900 }
-                    );
-                    setComponents(editorComps);
-                  }
+                  if (!isActive) switchSheet(idx);
                 }}
                 className={`px-3 py-1 rounded-md text-[11px] font-semibold transition-all ${
                   isActive

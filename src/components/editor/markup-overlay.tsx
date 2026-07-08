@@ -29,6 +29,11 @@ import {
   TEXT_CHAR_W,
   type Pt,
 } from "@/lib/dwg/markup-geometry";
+import {
+  remapMarkupForward,
+  remapPointForward,
+  remapPointInverse,
+} from "@/lib/dwg/markup-remap";
 
 /* ─── Constants ─── */
 const RED = "#e11d2a";
@@ -101,11 +106,16 @@ export function MarkupOverlay({ viewBox, sheetNumber }: MarkupOverlayProps) {
     selectMarkup,
     setMarkupTool,
   } = useEditorStore();
+  /** Composed axis maps for the active stretch (empty = unstretched). Markups are
+   *  stored in BASE (unstretched) coords; we forward them for display and inverse
+   *  the pointer for interactions so they track the geometry as it stretches.
+   *  When empty, forward/inverse are identity → behaviour is exactly as at rest. */
+  const stretchGroups = useEditorStore((s) => s.activeStretchGroups);
 
   const sheetMarkups = markups.filter((m) => m.sheetNumber === sheetNumber);
   const active = markupTool !== "pan";
 
-  /** Screen point -> this svg's viewBox point, via its own live CTM. */
+  /** Screen point -> this svg's viewBox point (DISPLAY/stretched space), via CTM. */
   const toDrawing = useCallback((e: { clientX: number; clientY: number }): Pt => {
     const svg = svgRef.current!;
     const p = svg.createSVGPoint();
@@ -114,6 +124,14 @@ export function MarkupOverlay({ viewBox, sheetNumber }: MarkupOverlayProps) {
     const d = p.matrixTransform(svg.getScreenCTM()!.inverse());
     return { x: d.x, y: d.y };
   }, []);
+
+  /** Screen point -> BASE (unstretched) coords, inverse-remapping through the
+   *  active stretch so interactions operate in the markups' stored space. */
+  const toBase = useCallback(
+    (e: { clientX: number; clientY: number }): Pt =>
+      remapPointInverse(toDrawing(e), stretchGroups),
+    [toDrawing, stretchGroups]
+  );
 
   /**
    * viewBox point -> local CSS-pixel offset within this svg's own box, for
@@ -144,10 +162,13 @@ export function MarkupOverlay({ viewBox, sheetNumber }: MarkupOverlayProps) {
       setInputPos(null);
       return;
     }
-    setInputPos(toLocalPx({ x: textDraft.x, y: textDraft.y }));
+    // textDraft anchor is in BASE coords; the <input> sits at its DISPLAY spot.
+    setInputPos(
+      toLocalPx(remapPointForward({ x: textDraft.x, y: textDraft.y }, stretchGroups))
+    );
     // Only the anchor coords matter here — `value` (typing) intentionally excluded.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [textDraft?.x, textDraft?.y, toLocalPx]);
+  }, [textDraft?.x, textDraft?.y, toLocalPx, stretchGroups]);
 
   /* ─── Delete/Backspace removes the selected markup (global, any tool) ─── */
   useEffect(() => {
@@ -202,40 +223,45 @@ export function MarkupOverlay({ viewBox, sheetNumber }: MarkupOverlayProps) {
   /* ─── Pointer handlers on the overlay svg ─── */
   const handlePointerDown = (e: React.PointerEvent<SVGSVGElement>) => {
     if (!active) return; // pan mode: pass-through, canvas pan handles it
-    const pt = toDrawing(e);
+    const display = toDrawing(e);                              // stretched space
+    const base = remapPointInverse(display, stretchGroups);    // stored space
 
     if (markupTool === "line" || markupTool === "arrow") {
       e.currentTarget.setPointerCapture(e.pointerId);
-      setDraft({ start: pt, end: pt });
+      // Draft rubber-band renders in DISPLAY space (it's drawn in the overlay).
+      setDraft({ start: display, end: display });
       return;
     }
 
     if (markupTool === "text") {
-      setTextDraft({ x: pt.x, y: pt.y, value: "", editingId: null });
+      // Store the anchor in BASE coords; the <input> is positioned at its
+      // forward (display) spot by the inputPos effect.
+      setTextDraft({ x: base.x, y: base.y, value: "", editingId: null });
       return;
     }
 
     // Select tool. Convert a fixed ~8px screen target into viewBox units via
     // the live CTM so thin lines stay clickable at any zoom (HIT_TOL alone is
-    // in viewBox units and shrinks on screen as you zoom out).
+    // in viewBox units and shrinks on screen as you zoom out). Hit-test against
+    // the stored (base) markups in base space.
     const pxPerUnit = svgRef.current?.getScreenCTM()?.a || 1;
     const tol = Math.max(HIT_TOL, 8 / pxPerUnit);
-    const id = hitTest(sheetMarkups, pt, tol);
+    const id = hitTest(sheetMarkups, base, tol);
     selectMarkup(id);
     if (id) {
       e.currentTarget.setPointerCapture(e.pointerId);
-      dragMoveRef.current = { id, last: pt };
+      dragMoveRef.current = { id, last: base };
     }
   };
 
   const handlePointerMove = (e: React.PointerEvent<SVGSVGElement>) => {
     if (draft) {
-      const pt = toDrawing(e);
+      const pt = toDrawing(e); // display space (preview)
       setDraft((d) => (d ? { ...d, end: pt } : d));
       return;
     }
     if (dragMoveRef.current) {
-      const pt = toDrawing(e);
+      const pt = toBase(e); // move stored markups in base space
       const { id, last } = dragMoveRef.current;
       const dx = pt.x - last.x;
       const dy = pt.y - last.y;
@@ -250,7 +276,11 @@ export function MarkupOverlay({ viewBox, sheetNumber }: MarkupOverlayProps) {
 
   const handlePointerUp = () => {
     if (draft) {
-      const seg = normalizeDrag(draft.start, draft.end, DRAG_MIN);
+      // Draft endpoints are in DISPLAY space; store the committed markup in BASE
+      // coords so it tracks the geometry through later stretch changes.
+      const baseStart = remapPointInverse(draft.start, stretchGroups);
+      const baseEnd = remapPointInverse(draft.end, stretchGroups);
+      const seg = normalizeDrag(baseStart, baseEnd, DRAG_MIN);
       if (seg && (markupTool === "line" || markupTool === "arrow")) {
         addMarkup({
           id: newId(sheetNumber, markups.length),
@@ -271,6 +301,7 @@ export function MarkupOverlay({ viewBox, sheetNumber }: MarkupOverlayProps) {
     <>
       <svg
         ref={svgRef}
+        data-elf-markup
         viewBox={viewBox}
         className="absolute inset-0"
         style={{
@@ -300,10 +331,17 @@ export function MarkupOverlay({ viewBox, sheetNumber }: MarkupOverlayProps) {
         onPointerMove={handlePointerMove}
         onPointerUp={handlePointerUp}
       >
-        {sheetMarkups.map((m) => {
+        {sheetMarkups.map((base) => {
+          // `base` is the stored (unstretched) markup; `m` is its DISPLAY
+          // position, remapped onto the currently-stretched geometry. Identity
+          // when there's no active stretch, so at rest this is a no-op.
+          const m = stretchGroups.length
+            ? remapMarkupForward(base, stretchGroups)
+            : base;
           const isSelected = m.id === selectedMarkupId;
 
           if (m.type === "text") {
+            const b = base as Extract<Markup, { type: "text" }>; // base coords for edit anchor
             const haloW = m.text.length * TEXT_CHAR_W + HALO_PAD * 2;
             return (
               <g key={m.id}>
@@ -325,12 +363,14 @@ export function MarkupOverlay({ viewBox, sheetNumber }: MarkupOverlayProps) {
                   y={m.y}
                   fill={RED}
                   fontSize={TEXT_FONT_SIZE}
+                  fontFamily="sans-serif"
                   style={{ userSelect: "none" }}
                   onDoubleClick={(e) => {
                     e.stopPropagation();
                     if (markupTool !== "select") return;
                     selectMarkup(m.id);
-                    setTextDraft({ x: m.x, y: m.y, value: m.text, editingId: m.id });
+                    // Anchor in BASE coords; positioned at its display spot.
+                    setTextDraft({ x: b.x, y: b.y, value: b.text, editingId: b.id });
                   }}
                 >
                   {m.text}

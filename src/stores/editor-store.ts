@@ -1,7 +1,7 @@
 import { create } from "zustand";
 import type { DwgComponent, DwgLayer, DwgTitleBlock, DwgSheet, Markup, MarkupId } from "@/lib/dwg/types";
 import type { SheetType } from "@/lib/dwg/sheet-type";
-import { parseDimInches, formatDimInches } from "@/lib/dwg/svg-stretch";
+import { parseDimInches, formatDimInches, type AxisGroup } from "@/lib/dwg/svg-stretch";
 
 /* ─── Types ─── */
 
@@ -65,6 +65,11 @@ export interface EditorState {
   /* SVG viewBox for coordinate mapping */
   svgViewBox: SvgViewBox | null;
 
+  /** Composed axis maps for the CURRENT applied stretch (empty when unstretched).
+   *  The markup overlay remaps annotation coords through these so markups track
+   *  the geometry as it stretches. */
+  activeStretchGroups: AxisGroup[];
+
   /* Components */
   components: Record<string, ComponentDef>;
   selectedId: string | null;
@@ -83,6 +88,16 @@ export interface EditorState {
   /** User-facing warning when a stretch was rolled back (drawing left unchanged) */
   stretchWarning: string | null;
   setStretchWarning: (msg: string | null) => void;
+
+  /** AI cascade is in-flight (inline-edit path) — drives a "checking…" pill. */
+  cascadePending: boolean;
+  setCascadePending: (pending: boolean) => void;
+  /** Highest-severity engineering warning surfaced by the AI cascade (was
+   *  previously dropped on the inline-edit path). */
+  cascadeNotice: { text: string; severity: "caution" | "critical" } | null;
+  setCascadeNotice: (
+    notice: { text: string; severity: "caution" | "critical" } | null
+  ) => void;
 
   /* Undo / Redo */
   history: { compId: string; dimKey: string; prevValue: string; newValue: string }[];
@@ -111,6 +126,7 @@ export interface EditorState {
     metadata: DwgTitleBlock | null
   ) => void;
   setSvgViewBox: (vb: SvgViewBox) => void;
+  setActiveStretchGroups: (groups: AxisGroup[]) => void;
   toggleLayer: (layerName: string) => void;
   select: (id: string | null) => void;
   toggleOverlays: () => void;
@@ -174,6 +190,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   visibleLayers: new Set<string>(),
 
   svgViewBox: null,
+  activeStretchGroups: [],
 
   components: {},
   selectedId: null,
@@ -185,6 +202,8 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   changeCount: 0,
   stretchVersion: 0,
   stretchWarning: null,
+  cascadePending: false,
+  cascadeNotice: null,
 
   history: [],
   historyIndex: -1,
@@ -227,7 +246,10 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     });
   },
   setSvgViewBox: (vb) => set({ svgViewBox: vb }),
+  setActiveStretchGroups: (groups) => set({ activeStretchGroups: groups }),
   setStretchWarning: (msg) => set({ stretchWarning: msg }),
+  setCascadePending: (pending) => set({ cascadePending: pending }),
+  setCascadeNotice: (notice) => set({ cascadeNotice: notice }),
   toggleLayer: (layerName) =>
     set((s) => {
       const next = new Set(s.visibleLayers);

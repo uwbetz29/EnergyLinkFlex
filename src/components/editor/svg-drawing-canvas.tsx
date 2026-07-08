@@ -28,6 +28,8 @@ import { MarkupToolbar } from "./markup-toolbar";
 
 const MINIMAP_W = 180;
 const DRAG_THRESHOLD = 5; // px — movements smaller than this count as click
+/** Coalesce rapid dimension edits into one AI cascade call. */
+const CASCADE_DEBOUNCE_MS = 500;
 
 /* ─── Dimension text matching ─── */
 
@@ -538,6 +540,11 @@ export function SvgDrawingCanvas() {
     Map<string, { original: string; current: string }>
   >(new Map());
 
+  // AI-cascade debounce + abort: coalesce rapid edits and cancel any in-flight
+  // request when a newer edit supersedes it.
+  const cascadeAbortRef = useRef<AbortController | null>(null);
+  const cascadeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   const {
     svgUrl,
     components,
@@ -549,6 +556,8 @@ export function SvgDrawingCanvas() {
     originals,
     svgViewBox,
     stretchWarning,
+    cascadePending,
+    cascadeNotice,
     sheetType,
     markupTool,
     currentSheet,
@@ -557,7 +566,17 @@ export function SvgDrawingCanvas() {
     setPan,
     setSvgViewBox,
     setStretchWarning,
+    setCascadeNotice,
   } = useEditorStore();
+
+  // On unmount (leaving the editor), cancel any pending/in-flight AI cascade so a
+  // late response can't setState on an unmounted tree or leave a phantom pill.
+  useEffect(() => {
+    return () => {
+      if (cascadeTimerRef.current) clearTimeout(cascadeTimerRef.current);
+      cascadeAbortRef.current?.abort();
+    };
+  }, []);
 
   /* ─── Resolve which component a click selects when boxes overlap ───
      Recompute from geometry (not paint order): pick the SMALLEST box that
@@ -595,6 +614,14 @@ export function SvgDrawingCanvas() {
     setSvgLoaded(false);
     setDimsExtracted(false);
     modifiedDimsRef.current.clear();
+    useEditorStore.getState().setActiveStretchGroups([]);
+    useEditorStore.getState().setCascadeNotice(null);
+    useEditorStore.getState().setCascadePending(false);
+    // Cancel any pending/in-flight cascade from the PREVIOUS sheet so it can't
+    // fire against the new sheet's (shared, singleton) store and contaminate it.
+    if (cascadeTimerRef.current) clearTimeout(cascadeTimerRef.current);
+    cascadeAbortRef.current?.abort();
+    cascadeAbortRef.current = null;
 
     async function loadSvg() {
       try {
@@ -838,14 +865,34 @@ export function SvgDrawingCanvas() {
   }
 
   /* ─── AI-powered cascade analysis ─── */
-  async function callAiCascade(
+
+  /** Debounced, abortable entry point. Rapid successive edits coalesce into one
+   *  cascade call, and any in-flight request is aborted when a newer edit lands
+   *  (so a stale response can't apply changes over a fresher edit). */
+  function callAiCascade(
     compName: string,
     dimKey: string,
     oldValue: string,
     newValue: string
   ) {
+    if (cascadeTimerRef.current) clearTimeout(cascadeTimerRef.current);
+    cascadeAbortRef.current?.abort();
+    cascadeTimerRef.current = setTimeout(() => {
+      runAiCascade(compName, dimKey, oldValue, newValue);
+    }, CASCADE_DEBOUNCE_MS);
+  }
+
+  async function runAiCascade(
+    compName: string,
+    dimKey: string,
+    oldValue: string,
+    newValue: string
+  ) {
+    const controller = new AbortController();
+    cascadeAbortRef.current = controller;
+    const store = useEditorStore.getState();
+    store.setCascadePending(true);
     try {
-      const store = useEditorStore.getState();
       const allComps = Object.values(store.components).map((c) => ({
         id: c.id,
         name: c.name,
@@ -856,6 +903,7 @@ export function SvgDrawingCanvas() {
       const res = await fetch("/api/ai/modify", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
+        signal: controller.signal,
         body: JSON.stringify({
           instruction: `The user just changed ${compName}'s ${dimKey} from ${oldValue} to ${newValue}. What are the engineering cascade effects on other components? Apply any necessary changes.`,
           selectedComponent: allComps.find((c) => c.name === compName) ?? null,
@@ -870,6 +918,7 @@ export function SvgDrawingCanvas() {
       // at the source: a non-positive / unparseable / garbage dimension would
       // collapse or garble the drawing, so drop it here rather than lean on the
       // stretch safety net to roll it back after the fact.
+      let notice: { text: string; severity: "caution" | "critical" } | null = null;
       for (const action of data.actions || []) {
         if (
           (action.action === "updateDim" || action.action === "cascade") &&
@@ -894,7 +943,16 @@ export function SvgDrawingCanvas() {
             }
           }
         }
+        // Surface engineering warnings the inline-edit path used to drop. Keep
+        // the highest severity (critical wins over caution).
+        if (action.action === "warn" && action.message) {
+          const severity = action.severity === "critical" ? "critical" : "caution";
+          if (!notice || severity === "critical") {
+            notice = { text: action.message as string, severity };
+          }
+        }
       }
+      store.setCascadeNotice(notice);
 
       // Re-apply stretches after cascade updates
       const svgEl = svgContainerRef.current?.querySelector("svg");
@@ -902,7 +960,12 @@ export function SvgDrawingCanvas() {
         requestAnimationFrame(() => applyAllStretches(svgEl));
       }
     } catch (err) {
+      // A superseded (aborted) request is expected — not an error.
+      if (err instanceof DOMException && err.name === "AbortError") return;
       console.warn("[ELF] AI cascade failed:", err);
+    } finally {
+      // Only the latest in-flight request clears the pending flag.
+      if (cascadeAbortRef.current === controller) store.setCascadePending(false);
     }
   }
 
@@ -1113,6 +1176,24 @@ export function SvgDrawingCanvas() {
   }
 
   /**
+   * Push the drawing svg's LIVE viewBox into the store so the markup overlay
+   * (which reads `svgViewBox`) shares the drawing's coordinate frame. A stretch
+   * grows the drawing viewBox (`vbY-sumV … vbH+sumV`) and undo restores it; keep
+   * the overlay in lockstep so markups don't drift when the whole frame shifts.
+   */
+  function syncOverlayViewBox(svgEl: SVGSVGElement) {
+    const vb = svgEl.getAttribute("viewBox")?.split(/\s+/).map(Number);
+    if (vb && vb.length === 4 && vb.every((n) => Number.isFinite(n))) {
+      useEditorStore.getState().setSvgViewBox({
+        minX: vb[0],
+        minY: vb[1],
+        width: vb[2],
+        height: vb[3],
+      });
+    }
+  }
+
+  /**
    * Recompute and apply ALL active stretches from the current originals/components state.
    * Uses the actual dimension block extension lines for precise zone definition.
    */
@@ -1140,6 +1221,7 @@ export function SvgDrawingCanvas() {
       // The SVG was hidden above; never leave the canvas blank-and-silent. Restore
       // visibility and surface the generic warning instead of returning invisibly.
       svgEl.style.visibility = "";
+      useEditorStore.getState().setActiveStretchGroups([]);
       notifyStretchFailed("missing or malformed viewBox");
       return;
     }
@@ -1274,6 +1356,8 @@ export function SvgDrawingCanvas() {
     if (!result.ok) {
       undoStretches(svgEl);          // belt-and-suspenders: guarantee known-good geometry
       postProcessSvgDom(svgEl);
+      syncOverlayViewBox(svgEl);     // viewBox rolled back to original → keep overlay in sync
+      useEditorStore.getState().setActiveStretchGroups([]); // no stretch active
       svgEl.style.visibility = "";
       notifyStretchFailed(result.reason ?? "unknown");
       return;                         // do NOT re-value dims off a rolled-back geometry
@@ -1291,6 +1375,13 @@ export function SvgDrawingCanvas() {
         .getState()
         .setStretchWarning("Detached details present — review manually.");
     }
+
+    // Keep the markup overlay's viewBox locked to the drawing's grown viewBox so
+    // markups stay in the same coordinate frame (fix #1: frame drift), and stash
+    // the composed axis maps so the overlay can remap markup coords onto the
+    // stretched geometry (fix #2: feature drift).
+    syncOverlayViewBox(svgEl);
+    useEditorStore.getState().setActiveStretchGroups(result.groups ?? []);
 
     // Show SVG after all transforms are applied (prevents flash)
     svgEl.style.visibility = "";
@@ -1430,6 +1521,8 @@ export function SvgDrawingCanvas() {
         // All dims restored to original — reset geometry
         undoStretches(svgEl);
         postProcessSvgDom(svgEl);
+        syncOverlayViewBox(svgEl); // viewBox restored → resync overlay
+        useEditorStore.getState().setActiveStretchGroups([]); // no stretch active
       }
     }
   }, [originals, components, svgLoaded]);
@@ -1610,34 +1703,74 @@ export function SvgDrawingCanvas() {
         select(null);
       }}
     >
-      {/* Stretch-failure warning banner (drawing was rolled back, left unchanged) */}
-      {stretchWarning && (
-        <div
-          className="absolute top-3 left-1/2 -translate-x-1/2 z-30 flex items-center gap-3
-                     px-4 py-2 rounded-xl bg-amber-50 border border-amber-300
-                     text-amber-800 text-[12px] font-medium shadow-md"
-          role="alert"
-        >
-          <span>{stretchWarning}</span>
-          <button
-            onClick={() => setStretchWarning(null)}
-            aria-label="Dismiss warning"
-            className="text-amber-500 hover:text-amber-800 transition-colors leading-none text-[14px]"
+      {/* Top-center banner stack — everything transient stacks here (instead of
+          overlapping in one slot or colliding with the top-right markup toolbar).
+          Container is click-through; each banner re-enables pointer events. */}
+      <div className="absolute top-3 left-1/2 -translate-x-1/2 z-30 flex flex-col items-center gap-2 pointer-events-none max-w-[min(90%,640px)]">
+        {/* AI cascade in-flight indicator */}
+        {cascadePending && (
+          <div
+            className="pointer-events-auto flex items-center gap-2 px-3 py-1.5
+                       rounded-full bg-blue-50 border border-blue-200 text-blue-600
+                       text-[11px] font-semibold shadow-sm"
+            aria-live="polite"
           >
-            {"✕"}
-          </button>
-        </div>
-      )}
+            <span className="w-3 h-3 rounded-full border-2 border-blue-300 border-t-blue-600 animate-spin" />
+            Checking downstream…
+          </div>
+        )}
 
-      {/* P&ID sheets are not resizable: static badge, no dismiss */}
-      {sheetType === "PID" && (
-        <div
-          className="absolute top-3 left-1/2 -translate-x-1/2 z-30 px-4 py-2 rounded-xl
-                      bg-slate-100 border border-slate-300 text-slate-600 text-[12px] font-semibold shadow-md"
-        >
-          {"P&ID — not resizable"}
-        </div>
-      )}
+        {/* Stretch-failure warning (drawing was rolled back, left unchanged) */}
+        {stretchWarning && (
+          <div
+            className="pointer-events-auto flex items-center gap-3 px-4 py-2 rounded-xl
+                       bg-amber-50 border border-amber-300 text-amber-800 text-[12px]
+                       font-medium shadow-md"
+            role="alert"
+          >
+            <span>{stretchWarning}</span>
+            <button
+              onClick={() => setStretchWarning(null)}
+              aria-label="Dismiss warning"
+              className="text-amber-500 hover:text-amber-800 transition-colors leading-none text-[14px]"
+            >
+              {"✕"}
+            </button>
+          </div>
+        )}
+
+        {/* AI cascade engineering warning (was previously dropped on this path) */}
+        {cascadeNotice && (
+          <div
+            className={`pointer-events-auto flex items-center gap-3 px-4 py-2 rounded-xl
+                       text-[12px] font-medium shadow-md ${
+                         cascadeNotice.severity === "critical"
+                           ? "bg-red-50 border border-red-300 text-red-800"
+                           : "bg-amber-50 border border-amber-300 text-amber-800"
+                       }`}
+            role="alert"
+          >
+            <span className="font-bold uppercase text-[10px] tracking-wide shrink-0">
+              {cascadeNotice.severity === "critical" ? "Critical" : "Caution"}
+            </span>
+            <span>{cascadeNotice.text}</span>
+            <button
+              onClick={() => setCascadeNotice(null)}
+              aria-label="Dismiss warning"
+              className="opacity-60 hover:opacity-100 transition-opacity leading-none text-[14px] shrink-0"
+            >
+              {"✕"}
+            </button>
+          </div>
+        )}
+
+        {/* P&ID sheets are not resizable: static badge, no dismiss */}
+        {sheetType === "PID" && (
+          <div className="pointer-events-auto px-4 py-2 rounded-xl bg-slate-100 border border-slate-300 text-slate-600 text-[12px] font-semibold shadow-md">
+            {"P&ID — not resizable"}
+          </div>
+        )}
+      </div>
 
       {/* SVG drawing + component overlays */}
       <div
@@ -1648,9 +1781,12 @@ export function SvgDrawingCanvas() {
           height: realH || "auto",
         }}
       >
-        {/* SVG container -- black lines on white */}
+        {/* SVG container -- black lines on white. `data-elf-canvas` is the
+            stable export hook: the minimap is a cloneNode of this svg (same
+            `.elf-dwg` class), so export selects `[data-elf-canvas] > svg`. */}
         <div
           ref={svgContainerRef}
+          data-elf-canvas
           className="absolute inset-0"
           style={{
             background: "white",

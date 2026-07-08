@@ -28,10 +28,23 @@
 import { isAnnotationElement } from "./annotations";
 import { AXIS_TOL, buildAxisMap, axisGrowth, placeOnAxis, type Segment } from "./axis-map";
 
+/** One composed piecewise-linear axis map, scoped by (axis, viewRegion, crossBand).
+ *  This is the exact map the stretch applies to geometry; the markup-remap reuses
+ *  it so annotations move identically to the drawing. */
+export interface AxisGroup {
+  axis: "x" | "y";
+  viewRegion?: { xMin: number; xMax: number };
+  crossBand?: { lo: number; hi: number };
+  segments: Segment[];
+}
+
 export interface StretchResult {
   ok: boolean;
   reason?: string;
   transformed: number;
+  /** The composed axis maps this stretch applied (present on ok:true). Consumers
+   *  (e.g. the markup overlay) reuse them to remap points the same way. */
+  groups?: AxisGroup[];
 }
 
 /** Safety budgets. The real drawing is ~75k elements and a stretch runs in ~1-2s. */
@@ -377,35 +390,17 @@ export function resolveContainerResiduals(stretches: StretchParams[]): StretchPa
  * remain ambiguous: the later spec of such a pair is skipped with a warning,
  * as is any overlapping horizontal pair with mismatched viewRegions.
  */
-export function applyMultiStretch(
-  svgRoot: SVGSVGElement,
-  stretches: StretchParams[],
-  opts: { maxElements?: number; maxMs?: number } = {}
-): StretchResult {
-  const maxElements = opts.maxElements ?? DEFAULT_MAX_ELEMENTS;
-  const maxMs = opts.maxMs ?? DEFAULT_MAX_MS;
-
-  // All-no-op fast path (a zero-delta spec only matters as a held child of a
-  // NONZERO container, so an all-zero set can never produce a transform).
-  if (stretches.every((s) => Math.abs(s.delta) < 0.01))
-    return { ok: true, transformed: 0 };
-
-  const modelSpace = findModelSpace(svgRoot);
-  if (!modelSpace) {
-    console.warn("[ELF stretch] Could not find *Model_Space");
-    return { ok: false, reason: "no model space", transformed: 0 };
-  }
-
-  // Keep the RAW viewBox string for a self-contained rollback (independent of
-  // saveOriginalViewBox / data-original-viewbox), plus the parsed numbers.
-  const vbStr = svgRoot.getAttribute("viewBox");
-  const vb = vbStr?.split(/\s+/).map(Number);
-  if (!vb || vb.length !== 4 || vb.some((n) => !Number.isFinite(n)))
-    return { ok: false, reason: "bad viewBox", transformed: 0 };
-  const [vbX, vbY, vbW, vbH] = vb;
-
-  // Normalize each stretch to a 1D interval along its axis, in Model_Space coords.
-  // vertical: internal Y = -(viewBox Y) due to the matrix(1,0,0,-1) flip.
+/**
+ * Compose a set of stretches into per-(axis, viewRegion, crossBand) piecewise
+ * axis maps. Pure and DOM-free. Extracted from applyMultiStretch so the markup
+ * overlay can remap annotation coordinates through the EXACT same maps the
+ * geometry uses (fidelity by construction). Normalizes each stretch to a 1-D
+ * interval in Model_Space coords (vertical: internal Y = -(viewBox Y)), drops
+ * no-op specs (unless nested with a nonzero one), classifies nesting
+ * (disjoint compose freely / coincident merge / nested compose / partial-overlap
+ * skip), then builds one map per group via buildAxisMap.
+ */
+export function composeStretchGroups(stretches: StretchParams[]): AxisGroup[] {
   type Spec = { axis: "x" | "y"; near: number; far: number; delta: number;
                 viewRegion?: { xMin: number; xMax: number };
                 crossBand?: { lo: number; hi: number } };
@@ -425,9 +420,7 @@ export function applyMultiStretch(
   }
 
   // Zero-delta filtering: drop no-op specs UNLESS they participate in a nesting
-  // relationship with a nonzero-delta spec on the same axis — a held (delta 0)
-  // child of a container carrying residual, or a container of a nonzero child.
-  // Held children must survive so they partition the container's gaps.
+  // relationship with a nonzero-delta spec on the same axis.
   const contains = (a: Spec, b: Spec) =>
     a.near <= b.near + AXIS_TOL && a.far >= b.far - AXIS_TOL;
   const specs = rawSpecs.filter(
@@ -439,14 +432,11 @@ export function applyMultiStretch(
           (contains(o, sp) || contains(sp, o))
       )
   );
-  if (specs.length === 0) return { ok: true, transformed: 0 };
+  if (specs.length === 0) return [];
 
   // Nesting classification (after TOL snapping): disjoint zones compose freely;
-  // coincident zones MERGE (summed delta); properly nested zones compose via the
-  // axis map; PARTIAL overlaps (and overlapping horizontals with mismatched
-  // viewRegions) keep the earlier spec and skip the later one with a warning.
-  // Two specs with DIFFERENT crossBands are automatically disjoint (U2): they
-  // never enter the overlap/containment test and each forms its own group.
+  // coincident zones MERGE (summed delta); properly nested compose via the axis
+  // map; PARTIAL overlaps keep the earlier spec and skip the later with a warning.
   const viewKey = (sp: Spec) =>
     sp.viewRegion ? `${sp.viewRegion.xMin}:${sp.viewRegion.xMax}` : "";
   const bandKey = (sp: Spec) =>
@@ -484,14 +474,9 @@ export function applyMultiStretch(
     }
     if (!merged) kept.push(sp);
   }
-  if (kept.length === 0) return { ok: true, transformed: 0 };
+  if (kept.length === 0) return [];
 
-  // Build ONE composed piecewise-linear map per (axis, viewRegion, crossBand)
-  // group. crossBand joins the key (U2): same-band specs compose into one map;
-  // different-band specs each get their own map and never cross-classify.
-  type AxisGroup = { axis: "x" | "y"; viewRegion?: { xMin: number; xMax: number };
-                     crossBand?: { lo: number; hi: number };
-                     segments: Segment[] };
+  // Build ONE composed piecewise-linear map per (axis, viewRegion, crossBand) group.
   const groupMap = new Map<string, Spec[]>();
   for (const sp of kept) {
     const key = `${sp.axis}|${viewKey(sp)}|${bandKey(sp)}`;
@@ -500,7 +485,6 @@ export function applyMultiStretch(
     else groupMap.set(key, [sp]);
   }
   const groups: AxisGroup[] = [];
-  let sumV = 0, sumH = 0;
   for (const list of groupMap.values()) {
     const segments = buildAxisMap(
       list.map((sp) => ({ near: sp.near, far: sp.far, delta: sp.delta }))
@@ -508,13 +492,50 @@ export function applyMultiStretch(
     if (segments.length === 0) continue;
     groups.push({ axis: list[0].axis, viewRegion: list[0].viewRegion,
                   crossBand: list[0].crossBand, segments });
-    // viewBox growth derives from the map's tail (not a blind delta sum), so it
-    // stays consistent with the geometry even when a container's delta is residual.
-    const growth = axisGrowth(segments);
-    if (list[0].axis === "y") sumV += growth;
+  }
+  return groups;
+}
+
+export function applyMultiStretch(
+  svgRoot: SVGSVGElement,
+  stretches: StretchParams[],
+  opts: { maxElements?: number; maxMs?: number } = {}
+): StretchResult {
+  const maxElements = opts.maxElements ?? DEFAULT_MAX_ELEMENTS;
+  const maxMs = opts.maxMs ?? DEFAULT_MAX_MS;
+
+  // All-no-op fast path (a zero-delta spec only matters as a held child of a
+  // NONZERO container, so an all-zero set can never produce a transform).
+  if (stretches.every((s) => Math.abs(s.delta) < 0.01))
+    return { ok: true, transformed: 0 };
+
+  const modelSpace = findModelSpace(svgRoot);
+  if (!modelSpace) {
+    console.warn("[ELF stretch] Could not find *Model_Space");
+    return { ok: false, reason: "no model space", transformed: 0 };
+  }
+
+  // Keep the RAW viewBox string for a self-contained rollback (independent of
+  // saveOriginalViewBox / data-original-viewbox), plus the parsed numbers.
+  const vbStr = svgRoot.getAttribute("viewBox");
+  const vb = vbStr?.split(/\s+/).map(Number);
+  if (!vb || vb.length !== 4 || vb.some((n) => !Number.isFinite(n)))
+    return { ok: false, reason: "bad viewBox", transformed: 0 };
+  const [vbX, vbY, vbW, vbH] = vb;
+
+  // Compose the stretches into per-(axis, viewRegion, crossBand) axis maps. The
+  // markup overlay reuses this exact function so annotations move identically.
+  const groups = composeStretchGroups(stretches);
+  if (groups.length === 0) return { ok: true, transformed: 0 };
+
+  // viewBox growth derives from each map's tail (not a blind delta sum), so it
+  // stays consistent with the geometry even when a container's delta is residual.
+  let sumV = 0, sumH = 0;
+  for (const g of groups) {
+    const growth = axisGrowth(g.segments);
+    if (g.axis === "y") sumV += growth;
     else sumH += growth;
   }
-  if (groups.length === 0) return { ok: true, transformed: 0 };
 
   const children = Array.from(modelSpace.children) as SVGGElement[];
 
@@ -597,7 +618,7 @@ export function applyMultiStretch(
 
   const elapsed = Math.round(performance.now() - t0);
   console.log(
-    `[ELF stretch] ${kept.length} zone(s) composed over ${children.length} elements in ${elapsed}ms:`,
+    `[ELF stretch] ${groups.length} map(s) composed over ${children.length} elements in ${elapsed}ms:`,
     `transformed=${transformed} sumV=${sumV.toFixed(1)} sumH=${sumH.toFixed(1)}`
   );
 
@@ -607,7 +628,7 @@ export function applyMultiStretch(
     rollback();
     return { ok: false, reason: invariantError, transformed: 0 };
   }
-  return { ok: true, transformed };
+  return { ok: true, transformed, groups };
 }
 
 /** Returns an error string if any post-stretch invariant is violated, else null. */
