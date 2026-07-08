@@ -22,6 +22,7 @@ export interface Project {
   dwg_ai_sections: PreScanResult | null;
   dwg_sheet_type: string | null;
   dwg_markups: Record<number, Markup[]> | null;
+  dwg_dim_edits: Record<string, Record<string, string>> | null;
   created_at: string;
   updated_at: string;
 }
@@ -53,7 +54,7 @@ export async function listProjects(): Promise<Project[]> {
     SELECT id, name, drawing_type, pdf_url, pdf_filename,
            dwg_url, dwg_filename, svg_url,
            dwg_components, dwg_layers, dwg_metadata, dwg_sheets, dwg_ai_sections,
-           dwg_sheet_type, dwg_markups,
+           dwg_sheet_type, dwg_markups, dwg_dim_edits,
            created_at, updated_at
     FROM projects
     WHERE user_id = ${user.id}
@@ -71,7 +72,7 @@ export async function getProject(projectId: string): Promise<Project> {
     SELECT id, name, drawing_type, pdf_url, pdf_filename,
            dwg_url, dwg_filename, svg_url,
            dwg_components, dwg_layers, dwg_metadata, dwg_sheets, dwg_ai_sections,
-           dwg_sheet_type, dwg_markups,
+           dwg_sheet_type, dwg_markups, dwg_dim_edits,
            created_at, updated_at
     FROM projects
     WHERE id = ${projectId} AND user_id = ${user.id}

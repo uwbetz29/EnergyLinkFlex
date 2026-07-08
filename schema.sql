@@ -46,6 +46,13 @@ ALTER TABLE projects ADD COLUMN IF NOT EXISTS dwg_sheets jsonb;
 -- 5. AI pre-scan results (identified system sections with dimensions)
 ALTER TABLE projects ADD COLUMN IF NOT EXISTS dwg_ai_sections jsonb;
 
+-- 6. Sheet-type gate + red markups (session 7)
+ALTER TABLE projects ADD COLUMN IF NOT EXISTS dwg_sheet_type text;
+ALTER TABLE projects ADD COLUMN IF NOT EXISTS dwg_markups jsonb;
+
+-- 7. Persisted dimension edits (session 8): { [compId]: { [dimKey]: editedValue } }
+ALTER TABLE projects ADD COLUMN IF NOT EXISTS dwg_dim_edits jsonb;
+
 -- 4. Migration: add DWG columns to existing projects table
 -- Run these if the table already exists:
 -- ALTER TABLE projects ADD COLUMN IF NOT EXISTS drawing_type text NOT NULL DEFAULT 'pdf' CHECK (drawing_type IN ('pdf', 'dwg'));

@@ -213,7 +213,7 @@ function ComponentList({
                       className="w-2 h-2 rounded-sm flex-shrink-0"
                       style={{ background: isHidden ? "#ccc" : c.color }}
                     />
-                    <span className={`text-[12px] font-semibold flex-1 truncate ${isHidden ? "text-[#a5b8d4]" : "text-[#001a4d]"}`}>
+                    <span className={`text-[12px] font-semibold flex-1 truncate text-left ${isHidden ? "text-[#a5b8d4]" : "text-[#001a4d]"}`}>
                       {c.name}
                     </span>
                     {!isHidden && (

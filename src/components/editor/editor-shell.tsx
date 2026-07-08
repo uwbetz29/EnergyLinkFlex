@@ -10,7 +10,7 @@ import { ComponentSidebar } from "./component-sidebar";
 import { NLBar } from "./nl-bar";
 import { StageNav } from "./stage-nav";
 import Link from "next/link";
-import { ArrowLeft, Undo2, Download, Loader2, Layers } from "lucide-react";
+import { ArrowLeft, Undo2, Redo2, Download, Loader2, Layers, Check } from "lucide-react";
 import { getProject } from "@/app/projects/actions";
 import { toEditorComponents, parseSvgViewBox } from "@/lib/dwg/extractor";
 import type { AiSection } from "@/lib/ai/prescan";
@@ -34,6 +34,26 @@ function groupMarkupsBySheet(markups: Markup[]): Record<number, Markup[]> {
 }
 
 const MARKUP_SAVE_DEBOUNCE_MS = 800;
+
+/** Diff current component dims against their originals into the persistable
+ *  { [compId]: { [dimKey]: editedValue } } shape (only actually-changed dims). */
+function buildDimEdits(
+  originals: Record<string, Record<string, string>>,
+  components: Record<string, ComponentDef>
+): Record<string, Record<string, string>> {
+  const out: Record<string, Record<string, string>> = {};
+  for (const compId of Object.keys(originals)) {
+    for (const dimKey of Object.keys(originals[compId])) {
+      const cur = components[compId]?.dims[dimKey];
+      if (cur !== undefined && cur !== originals[compId][dimKey]) {
+        (out[compId] ??= {})[dimKey] = cur;
+      }
+    }
+  }
+  return out;
+}
+
+type SaveState = "idle" | "saving" | "saved" | "error";
 
 /** Convert AI pre-scan sections into editor ComponentDefs */
 function aiSectionsToComponents(
@@ -83,11 +103,24 @@ export function EditorShell() {
     setSheetType,
     setActiveSheet,
     setMarkups,
+    undo,
+    redo,
+    history,
+    historyIndex,
+    applyPersistedDimEdits,
   } = useEditorStore();
   const markups = useEditorStore((s) => s.markups);
+  const components = useEditorStore((s) => s.components);
+  const originals = useEditorStore((s) => s.originals);
+  const canUndo = historyIndex >= 0;
+  const canRedo = historyIndex < history.length - 1;
 
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [saveState, setSaveState] = useState<SaveState>("idle");
+  // Set once the initial load for this projectId has finished applying any
+  // persisted dim edits, so the save effect never fires mid-load.
+  const dimHydratedFor = useRef<string | null>(null);
 
   // Guards the markup-save effect against two failure modes:
   //  1. Saving on mount before hydrate has completed (projectId is set but
@@ -225,6 +258,13 @@ export function EditorShell() {
             setPdfUrl(project.pdf_url);
           }
         }
+
+        // Re-apply any persisted dimension edits now that components are built,
+        // then mark this project hydrated so the save effect can run.
+        if (project.drawing_type === "dwg") {
+          applyPersistedDimEdits(project.dwg_dim_edits ?? {});
+        }
+        dimHydratedFor.current = project.id;
       } catch (err) {
         if (!cancelled) {
           setError(
@@ -240,7 +280,7 @@ export function EditorShell() {
     return () => {
       cancelled = true;
     };
-  }, [projectId, setPdfUrl, setSvgUrl, setProject, setComponents, setDrawingType, setDwgData, setSheets, setSheetType, setMarkups]);
+  }, [projectId, setPdfUrl, setSvgUrl, setProject, setComponents, setDrawingType, setDwgData, setSheets, setSheetType, setMarkups, applyPersistedDimEdits]);
 
   // Debounced markup persistence. Markup-only — dimension edits are handled
   // by a separate mechanism and must not be touched here.
@@ -265,6 +305,7 @@ export function EditorShell() {
       return;
     }
 
+    setSaveState("saving");
     const timer = setTimeout(() => {
       fetch("/api/dwg/markups", {
         method: "PATCH",
@@ -273,13 +314,63 @@ export function EditorShell() {
           projectId,
           markupsBySheet: groupMarkupsBySheet(markups),
         }),
-      }).catch((err) => {
-        console.error("[ELF] Failed to save markups", err);
-      });
+      })
+        .then((r) => setSaveState(r.ok ? "saved" : "error"))
+        .catch((err) => {
+          console.error("[ELF] Failed to save markups", err);
+          setSaveState("error");
+        });
     }, MARKUP_SAVE_DEBOUNCE_MS);
 
     return () => clearTimeout(timer);
   }, [markups, projectId]);
+
+  // Debounced dimension-edit persistence. Mirrors the markup save above; gated
+  // on dimHydratedFor so it never PATCHes before the initial load has applied
+  // any persisted edits.
+  useEffect(() => {
+    if (!projectId) return;
+    if (dimHydratedFor.current !== projectId) return;
+
+    setSaveState("saving");
+    const dimEdits = buildDimEdits(originals, components);
+    const timer = setTimeout(() => {
+      fetch("/api/dwg/dimensions", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ projectId, dimEdits }),
+      })
+        .then((r) => setSaveState(r.ok ? "saved" : "error"))
+        .catch((err) => {
+          console.error("[ELF] Failed to save dimension edits", err);
+          setSaveState("error");
+        });
+    }, MARKUP_SAVE_DEBOUNCE_MS);
+
+    return () => clearTimeout(timer);
+  }, [components, originals, projectId]);
+
+  // Undo / redo keyboard shortcuts (Cmd/Ctrl+Z, Cmd/Ctrl+Shift+Z, Ctrl+Y).
+  // Skip when focus is in a text field so the browser's native text undo wins.
+  useEffect(() => {
+    function onKeyDown(e: KeyboardEvent) {
+      if (!(e.metaKey || e.ctrlKey)) return;
+      const el = e.target as HTMLElement | null;
+      const tag = el?.tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA" || el?.isContentEditable) return;
+      const key = e.key.toLowerCase();
+      if (key === "z") {
+        e.preventDefault();
+        if (e.shiftKey) redo();
+        else undo();
+      } else if (key === "y") {
+        e.preventDefault();
+        redo();
+      }
+    }
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [undo, redo]);
 
   if (loading) {
     return (
@@ -346,9 +437,43 @@ export function EditorShell() {
 
         {/* Actions */}
         <div className="flex gap-1.5 items-center">
-          <button className="px-3 py-1.5 rounded-[7px] text-[11px] font-semibold border border-white/15 bg-white/6 text-white/70 hover:bg-white/12 hover:text-white transition-all flex items-center gap-1.5">
+          {saveState !== "idle" && (
+            <span
+              className="text-[10px] font-semibold flex items-center gap-1 mr-1 min-w-[58px] justify-end text-white/55"
+              aria-live="polite"
+            >
+              {saveState === "saving" && (
+                <>
+                  <Loader2 className="w-3 h-3 animate-spin" /> Saving…
+                </>
+              )}
+              {saveState === "saved" && (
+                <>
+                  <Check className="w-3 h-3 text-emerald-300" /> Saved
+                </>
+              )}
+              {saveState === "error" && (
+                <span className="text-red-300">Save failed</span>
+              )}
+            </span>
+          )}
+          <button
+            onClick={undo}
+            disabled={!canUndo}
+            title="Undo (⌘Z)"
+            className="px-3 py-1.5 rounded-[7px] text-[11px] font-semibold border border-white/15 bg-white/6 text-white/70 hover:bg-white/12 hover:text-white transition-all flex items-center gap-1.5 disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-white/6 disabled:hover:text-white/70"
+          >
             <Undo2 className="w-3 h-3" />
             Undo
+          </button>
+          <button
+            onClick={redo}
+            disabled={!canRedo}
+            title="Redo (⌘⇧Z)"
+            className="px-3 py-1.5 rounded-[7px] text-[11px] font-semibold border border-white/15 bg-white/6 text-white/70 hover:bg-white/12 hover:text-white transition-all flex items-center gap-1.5 disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-white/6 disabled:hover:text-white/70"
+          >
+            <Redo2 className="w-3 h-3" />
+            Redo
           </button>
           <button className="px-3 py-1.5 rounded-[7px] text-[11px] font-bold bg-white text-[#002e81] hover:bg-[#e6eeff] transition-all flex items-center gap-1.5">
             <Download className="w-3 h-3" />

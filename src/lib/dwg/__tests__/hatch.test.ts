@@ -62,3 +62,118 @@ describe("dampenHatch", () => {
     expect(typeof HATCH_COLOR).toBe("string");
   });
 });
+
+/**
+ * BLOB v2 — the exploded HATCH / tessellated texture that survives the line pass
+ * also arrives as thousands of sub-unit `<circle>`, `<ellipse>`, and `<path>`
+ * (arc) elements. On white paper these render black and clump into residual
+ * blobs on equipment tops. Extend dampenHatch to also gray SMALL circles /
+ * ellipses / paths by injecting an inline `stroke` on the ELEMENT ITSELF.
+ *
+ * Element-inline (not group-recolor) is required because the real ellipse
+ * structure is `<g stroke><g transform=rotate><ellipse/></g></g>` — the stroke
+ * lives on the grandparent, and an element-level stroke overrides it while never
+ * touching a sibling. "Size" per shape: circle = 2r, ellipse = 2·max(rx,ry),
+ * path = bbox diagonal of the anchor endpoints parsed from `d`. Strict `< maxLen`.
+ */
+const esc = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+const grayOn = (tag: string) =>
+  new RegExp(`<${tag}\\b[^>]*\\bstroke="${esc(HATCH_COLOR)}"`);
+
+describe("dampenHatch — circles / ellipses / paths (blob v2)", () => {
+  it("grays a SMALL circle by injecting an inline stroke on the <circle>", () => {
+    const svg = `<svg><g id="c" stroke="rgb(255,255,255)" fill="none"><circle cx="0" cy="0" r="0.05" /></g></svg>`; // diam 0.1 < 0.35
+    const out = dampenHatch(svg);
+    expect(out).toMatch(grayOn("circle"));
+  });
+
+  it("leaves a LARGE circle untouched", () => {
+    const svg = `<svg><g stroke="rgb(255,255,255)"><circle cx="0" cy="0" r="5" /></g></svg>`; // diam 10
+    const out = dampenHatch(svg);
+    expect(out).not.toContain(HATCH_COLOR);
+  });
+
+  it("does NOT gray an element whose size is exactly maxLen (strict <)", () => {
+    const svg = `<svg><g stroke="rgb(255,255,255)"><circle r="0.175" /></g></svg>`; // diam 0.35 == maxLen
+    const out = dampenHatch(svg);
+    expect(out).not.toContain(HATCH_COLOR);
+  });
+
+  it("grays a small element even with NO enclosing stroke group (element-inline)", () => {
+    const svg = `<svg><circle cx="0" cy="0" r="0.05" /></svg>`;
+    const out = dampenHatch(svg);
+    expect(out).toMatch(grayOn("circle"));
+  });
+
+  it("grays a SMALL ellipse when the stroke lives on an ancestor <g> (nested rotate group)", () => {
+    const svg = `<svg><g id="e" stroke="rgb(255,255,255)" fill="none"><g transform="rotate(90 1 1)"><ellipse cx="1" cy="1" rx="0.1" ry="0.08" /></g></g></svg>`; // 2*max=0.2 < 0.35
+    const out = dampenHatch(svg);
+    expect(out).toMatch(grayOn("ellipse"));
+  });
+
+  it("leaves a LARGE ellipse untouched", () => {
+    const svg = `<svg><g stroke="rgb(255,255,255)"><g transform="rotate(90 1 1)"><ellipse cx="1" cy="1" rx="3" ry="2" /></g></g></svg>`;
+    const out = dampenHatch(svg);
+    expect(out).not.toContain(HATCH_COLOR);
+  });
+
+  it("grays a SMALL straight-segment path", () => {
+    const svg = `<svg><g stroke="rgb(255,255,255)"><path d="M 0 0 L 0.1 0.1" /></g></svg>`; // diag ~0.14
+    const out = dampenHatch(svg);
+    expect(out).toMatch(grayOn("path"));
+  });
+
+  it("grays a SMALL arc path (endpoint parsed past the A radii/rotation/flags)", () => {
+    const svg = `<svg><g stroke="rgb(255,255,255)"><path d="M 0 0 A 0.05 0.05 0 1 1 0.1 0" /></g></svg>`; // endpoints (0,0)->(0.1,0), diag 0.1
+    const out = dampenHatch(svg);
+    expect(out).toMatch(grayOn("path"));
+  });
+
+  it("accumulates RELATIVE path commands when measuring extent", () => {
+    const svg = `<svg><g stroke="rgb(255,255,255)"><path d="M 1 1 l 0.1 0 l 0 0.1" /></g></svg>`; // spans 0.1x0.1
+    const out = dampenHatch(svg);
+    expect(out).toMatch(grayOn("path"));
+  });
+
+  it("leaves a LARGE path (long extent) untouched", () => {
+    const svg = `<svg><g stroke="rgb(255,255,255)"><path d="M 0 0 L 50 0" /></g></svg>`;
+    const out = dampenHatch(svg);
+    expect(out).not.toContain(HATCH_COLOR);
+  });
+
+  it("leaves a multi-subpath path spanning a large area untouched", () => {
+    // two tiny subpaths far apart is real geometry, not one hatch cell
+    const svg = `<svg><g stroke="rgb(255,255,255)"><path d="M 0 0 L 0.1 0 M 20 20 L 20.1 20" /></g></svg>`;
+    const out = dampenHatch(svg);
+    expect(out).not.toContain(HATCH_COLOR);
+  });
+
+  it("leaves a path with an unparseable d untouched (safe default: never gray unknown geometry)", () => {
+    const svg = `<svg><g stroke="rgb(255,255,255)"><path d="" /></g><g stroke="rgb(255,255,255)"><path d="Z" /></g></svg>`;
+    const out = dampenHatch(svg);
+    expect(out).not.toContain(HATCH_COLOR);
+  });
+
+  it("replaces an existing inline stroke on a small element (no duplicate stroke attr)", () => {
+    const svg = `<svg><circle r="0.05" stroke="rgb(255,255,255)" /></svg>`;
+    const out = dampenHatch(svg);
+    const circle = out.match(/<circle\b[^>]*>/)![0];
+    expect((circle.match(/\bstroke=/g) || []).length).toBe(1);
+    expect(circle).toContain(`stroke="${HATCH_COLOR}"`);
+  });
+
+  it("respects a custom maxLen and color for the new element types", () => {
+    const svg = `<svg><g stroke="rgb(255,255,255)"><circle r="2" /></g></svg>`; // diam 4
+    const out = dampenHatch(svg, { maxLen: 10, color: "rgb(180,180,180)" }); // 4 < 10 -> grayed
+    expect(out).toMatch(/<circle\b[^>]*\bstroke="rgb\(180,180,180\)"/);
+  });
+
+  it("still dampens short LINES (regression) and preserves surrounding markup", () => {
+    const svg = `<svg><rect x="0"/><g stroke="rgb(0,0,0)"><line x1="0" y1="0" x2="0.1" y2="0"/></g><circle r="0.05"/><text>hi</text></svg>`;
+    const out = dampenHatch(svg);
+    expect(out).toContain(`<rect x="0"/>`);
+    expect(out).toContain(`<text>hi</text>`);
+    // line group recolored AND circle element grayed -> two occurrences of the gray
+    expect((out.match(new RegExp(esc(HATCH_COLOR), "g")) || []).length).toBe(2);
+  });
+});

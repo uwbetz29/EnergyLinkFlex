@@ -119,6 +119,10 @@ export interface EditorState {
   setZoom: (z: number) => void;
   setPan: (x: number, y: number) => void;
   updateDim: (compId: string, dimKey: string, value: string) => void;
+  /** Re-apply persisted dimension edits after a load: sets originals to the
+   *  freshly-built values and overrides dims to the saved edited values.
+   *  Does NOT touch history (a restored edit isn't a session undo step). */
+  applyPersistedDimEdits: (edits: Record<string, Record<string, string>>) => void;
   quickAdjust: (compId: string, deltaFt: number) => void;
   resetComp: (compId: string) => void;
   toggleComponentVisibility: (compId: string) => void;
@@ -290,6 +294,49 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     });
   },
 
+  applyPersistedDimEdits: (edits) => {
+    const { components } = get();
+    // Always produce a new components ref so the save effect fires exactly once
+    // on hydrate (consumed as the skip), even when there are no edits to apply.
+    const newComps = { ...components };
+    const newOrig: Record<string, Record<string, string>> = {};
+
+    for (const compId of Object.keys(edits ?? {})) {
+      const comp = newComps[compId];
+      if (!comp) continue;
+      const dimEdits = edits[compId];
+      if (typeof dimEdits !== "object" || dimEdits === null) continue;
+
+      const nextDims = { ...comp.dims };
+      const compOrig: Record<string, string> = {};
+      for (const dimKey of Object.keys(dimEdits)) {
+        if (!(dimKey in comp.dims)) continue;
+        const editedValue = dimEdits[dimKey];
+        if (typeof editedValue !== "string") continue;
+        compOrig[dimKey] = comp.dims[dimKey]; // original = freshly-built value
+        nextDims[dimKey] = editedValue;
+      }
+      if (Object.keys(compOrig).length > 0) {
+        newComps[compId] = { ...comp, dims: nextDims };
+        newOrig[compId] = compOrig;
+      }
+    }
+
+    let count = 0;
+    for (const cid of Object.keys(newOrig)) {
+      for (const dk of Object.keys(newOrig[cid])) {
+        if (newComps[cid]?.dims[dk] !== newOrig[cid][dk]) count++;
+      }
+    }
+
+    set({
+      components: newComps,
+      originals: newOrig,
+      changeCount: count,
+      stretchVersion: get().stretchVersion + 1,
+    });
+  },
+
   quickAdjust: (compId, deltaFt) => {
     const { components } = get();
     const comp = components[compId];
@@ -434,8 +481,14 @@ export const useEditorStore = create<EditorState>((set, get) => ({
 
   /* ─── Multi-sheet actions ─── */
 
-  setSheets: (sheets) =>
-    set({ sheets, activeSheetIndex: 0, totalSheets: sheets.length }),
+  setSheets: (sheets) => {
+    // Register the sheets, then activate sheet 0 so its svgUrl / components /
+    // layers / metadata / sheetType actually populate — otherwise a multi-sheet
+    // DWG loads a blank canvas (svgUrl never set) and first-sheet markups scope
+    // to the wrong sheet number.
+    set({ sheets, activeSheetIndex: 0, totalSheets: sheets.length });
+    if (sheets.length > 0) get().setActiveSheet(0);
+  },
 
   setActiveSheet: (index) => {
     const { sheets } = get();

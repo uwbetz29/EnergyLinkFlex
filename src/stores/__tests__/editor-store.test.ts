@@ -173,6 +173,76 @@ describe("Editor Store — DWG support", () => {
     });
   });
 
+  describe("setSheets (B6 — multi-sheet must not load blank)", () => {
+    it("activates sheet 0 so svgUrl / layers / sheetType / currentSheet populate", () => {
+      const sheets = [
+        {
+          sheetNumber: 2,
+          label: "Sheet 2",
+          svgUrl: "https://blob.example.com/s2.svg",
+          components: [],
+          layers: [
+            { name: "0", handle: "1", colorIndex: 7, color: "#fff", isFrozen: false, isOff: false, isLocked: false },
+          ],
+          metadata: null,
+          sheetType: "GA",
+        },
+        {
+          sheetNumber: 3,
+          label: "Sheet 3",
+          svgUrl: "https://blob.example.com/s3.svg",
+          components: [],
+          layers: [],
+          metadata: null,
+          sheetType: "PID",
+        },
+      ] as unknown as Parameters<ReturnType<typeof useEditorStore.getState>["setSheets"]>[0];
+
+      useEditorStore.getState().setSheets(sheets);
+
+      const s = useEditorStore.getState();
+      expect(s.sheets).toHaveLength(2);
+      expect(s.activeSheetIndex).toBe(0);
+      expect(s.totalSheets).toBe(2);
+      // The bug: setSheets never populated these from sheet 0 -> blank canvas.
+      expect(s.svgUrl).toBe("https://blob.example.com/s2.svg");
+      expect(s.currentSheet).toBe(2);
+      expect(s.sheetType).toBe("GA");
+      expect(s.visibleLayers.has("0")).toBe(true);
+    });
+  });
+
+  describe("applyPersistedDimEdits (B2 — restore saved dim edits on load)", () => {
+    it("overrides dims to saved values, reconstructs originals, skips unknowns, leaves history", () => {
+      useEditorStore.setState({
+        components: {
+          c1: { id: "c1", name: "Silencer", dims: { Height: "8'-0\"" } } as unknown as never,
+          c2: { id: "c2", name: "Duct", dims: { Width: "5'-0\"" } } as unknown as never,
+        },
+        originals: {},
+        changeCount: 0,
+        history: [],
+        historyIndex: -1,
+      });
+
+      useEditorStore.getState().applyPersistedDimEdits({
+        c1: { Height: "12'-0\"" },
+        cX: { Bogus: "1" }, // non-existent component -> ignored
+        c2: { Nope: "9" }, // non-existent dim -> ignored
+      });
+
+      const s = useEditorStore.getState();
+      expect((s.components.c1 as { dims: Record<string, string> }).dims.Height).toBe("12'-0\"");
+      expect(s.originals.c1.Height).toBe("8'-0\""); // original reconstructed from built value
+      expect(s.originals.cX).toBeUndefined();
+      expect(s.originals.c2).toBeUndefined();
+      expect(s.changeCount).toBe(1);
+      // A restored edit is not a session undo step.
+      expect(s.history).toHaveLength(0);
+      expect(s.historyIndex).toBe(-1);
+    });
+  });
+
   describe("existing PDF functionality preserved", () => {
     it("setPdfUrl still works", () => {
       useEditorStore.getState().setPdfUrl("https://example.com/test.pdf");
