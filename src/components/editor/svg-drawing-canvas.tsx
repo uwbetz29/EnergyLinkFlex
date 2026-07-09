@@ -20,6 +20,7 @@ import { isAnnotationBlockName, stripAnnotationUses } from "@/lib/dwg/annotation
 import { dampenHatch } from "@/lib/dwg/hatch";
 import { getDimBlockBounds, dimBlockBox2D, computeComponentBand } from "@/lib/dwg/dim-geometry";
 import { detectDetachedAssemblies, CONF_MIN } from "@/lib/dwg/detached";
+import { buildDeterministicSummary, type AppliedChange } from "@/lib/dwg/change-summary";
 import type { ComponentDef } from "@/stores/editor-store";
 import { MarkupOverlay } from "./markup-overlay";
 import { MarkupToolbar } from "./markup-toolbar";
@@ -561,6 +562,7 @@ export function SvgDrawingCanvas() {
     stretchWarning,
     cascadePending,
     cascadeNotice,
+    cascadeSummary,
     sheetType,
     markupTool,
     currentSheet,
@@ -570,6 +572,7 @@ export function SvgDrawingCanvas() {
     setSvgViewBox,
     setStretchWarning,
     setCascadeNotice,
+    setCascadeSummary,
   } = useEditorStore();
 
   // On unmount (leaving the editor), cancel any pending/in-flight AI cascade so a
@@ -922,6 +925,7 @@ export function SvgDrawingCanvas() {
       // collapse or garble the drawing, so drop it here rather than lean on the
       // stretch safety net to roll it back after the fact.
       let notice: { text: string; severity: "caution" | "critical" } | null = null;
+      const applied: AppliedChange[] = [];
       for (const action of data.actions || []) {
         if (
           (action.action === "updateDim" || action.action === "cascade") &&
@@ -931,7 +935,16 @@ export function SvgDrawingCanvas() {
         ) {
           const check = validateDimValue(action.value);
           if (check.ok) {
-            store.updateDim(action.componentId, action.dimKey, action.value);
+            const snap = useEditorStore.getState().components[action.componentId];
+            const changed = store.updateDim(action.componentId, action.dimKey, action.value);
+            if (changed && snap) {
+              applied.push({
+                componentName: snap.name,
+                dimLabel: action.dimKey,
+                oldValue: snap.dims[action.dimKey],
+                newValue: action.value,
+              });
+            }
           } else {
             console.warn(`[ELF] AI cascade rejected value: ${check.reason}`);
           }
@@ -940,7 +953,16 @@ export function SvgDrawingCanvas() {
           for (const effect of action.cascadeEffects) {
             const check = validateDimValue(effect.value);
             if (check.ok) {
-              store.updateDim(effect.componentId, effect.dimKey, effect.value);
+              const snap = useEditorStore.getState().components[effect.componentId];
+              const changed = store.updateDim(effect.componentId, effect.dimKey, effect.value);
+              if (changed && snap) {
+                applied.push({
+                  componentName: snap.name,
+                  dimLabel: effect.dimKey,
+                  oldValue: snap.dims[effect.dimKey],
+                  newValue: effect.value,
+                });
+              }
             } else {
               console.warn(`[ELF] AI cascade rejected value: ${check.reason}`);
             }
@@ -956,6 +978,13 @@ export function SvgDrawingCanvas() {
         }
       }
       store.setCascadeNotice(notice);
+
+      const primary: AppliedChange = { componentName: compName, dimLabel: dimKey, oldValue, newValue };
+      const summaryText =
+        typeof data.summary === "string" && data.summary.trim()
+          ? data.summary.trim()
+          : buildDeterministicSummary(primary, applied);
+      store.setCascadeSummary(summaryText);
 
       // Re-apply stretches after cascade updates
       const svgEl = svgContainerRef.current?.querySelector("svg");
@@ -1064,6 +1093,7 @@ export function SvgDrawingCanvas() {
           // user-edit path only; the AI cascade also calls updateDim, so we must
           // NOT clear showDiff inside updateDim itself.
           useEditorStore.getState().setShowDiff(false);
+          useEditorStore.getState().setCascadeSummary(null);
           store.updateDim(closestCompId, dimKey, trimmed);
 
           // ─── VISUAL STRETCH: deform the drawing at the precise dimension zone ───
@@ -1783,6 +1813,26 @@ export function SvgDrawingCanvas() {
             <button
               onClick={() => setCascadeNotice(null)}
               aria-label="Dismiss warning"
+              className="opacity-60 hover:opacity-100 transition-opacity leading-none text-[14px] shrink-0"
+            >
+              {"✕"}
+            </button>
+          </div>
+        )}
+
+        {/* Plain-language recap of the last cascade (info-level) */}
+        {cascadeSummary && (
+          <div
+            className="pointer-events-auto flex items-start gap-3 px-4 py-2 rounded-xl
+                       bg-sky-50 border border-sky-200 text-sky-800 text-[12px]
+                       font-medium shadow-md"
+            role="status"
+          >
+            <span className="font-bold uppercase text-[10px] tracking-wide shrink-0 mt-0.5">Summary</span>
+            <span>{cascadeSummary}</span>
+            <button
+              onClick={() => setCascadeSummary(null)}
+              aria-label="Dismiss summary"
               className="opacity-60 hover:opacity-100 transition-opacity leading-none text-[14px] shrink-0"
             >
               {"✕"}

@@ -98,6 +98,9 @@ export interface EditorState {
   setCascadeNotice: (
     notice: { text: string; severity: "caution" | "critical" } | null
   ) => void;
+  /** Plain-language recap of the last AI cascade ("what changed"). Info-level. */
+  cascadeSummary: string | null;
+  setCascadeSummary: (s: string | null) => void;
 
   /* Undo / Redo */
   history: { compId: string; dimKey: string; prevValue: string; newValue: string }[];
@@ -135,7 +138,7 @@ export interface EditorState {
   setStage: (s: Stage) => void;
   setZoom: (z: number) => void;
   setPan: (x: number, y: number) => void;
-  updateDim: (compId: string, dimKey: string, value: string) => void;
+  updateDim: (compId: string, dimKey: string, value: string) => boolean;
   /** Re-apply persisted dimension edits after a load: sets originals to the
    *  freshly-built values and overrides dims to the saved edited values.
    *  Does NOT touch history (a restored edit isn't a session undo step). */
@@ -206,6 +209,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   stretchWarning: null,
   cascadePending: false,
   cascadeNotice: null,
+  cascadeSummary: null,
 
   history: [],
   historyIndex: -1,
@@ -252,6 +256,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   setStretchWarning: (msg) => set({ stretchWarning: msg }),
   setCascadePending: (pending) => set({ cascadePending: pending }),
   setCascadeNotice: (notice) => set({ cascadeNotice: notice }),
+  setCascadeSummary: (s) => set({ cascadeSummary: s }),
   toggleLayer: (layerName) =>
     set((s) => {
       const next = new Set(s.visibleLayers);
@@ -274,15 +279,15 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   updateDim: (compId, dimKey, value) => {
     const { components, originals } = get();
     const comp = components[compId];
-    if (!comp) return;
+    if (!comp) return false;
     // Ignore updates to a dim the component doesn't have — the AI cascade can
     // return a phantom dimKey, which would otherwise record `undefined` as the
     // "original" and crash the change-info/stretch paths (parseDimInches).
-    if (!(dimKey in comp.dims)) return;
+    if (!(dimKey in comp.dims)) return false;
 
     // Truncate redo history and add new entry
     const prevValue = comp.dims[dimKey];
-    if (prevValue === value) return; // No change
+    if (prevValue === value) return false; // No change
     const newHistory = get().history.slice(0, get().historyIndex + 1);
     newHistory.push({ compId, dimKey, prevValue, newValue: value });
 
@@ -317,6 +322,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       history: newHistory,
       historyIndex: newHistory.length - 1,
     });
+    return true;
   },
 
   applyPersistedDimEdits: (edits) => {
@@ -376,7 +382,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         const newVal = Math.max(1, num + deltaFt);
         // A real user edit → exit the Before (original) demo view. Only on the
         // paths that actually call updateDim, never on the no-op returns above.
-        set({ showDiff: false });
+        set({ showDiff: false, cascadeSummary: null });
         get().updateDim(compId, key, String(Math.round(newVal * 100) / 100));
         return;
       }
@@ -384,7 +390,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     }
     const newInches = Math.max(12, inches + deltaFt * 12);
     // A real user edit → exit the Before (original) demo view.
-    set({ showDiff: false });
+    set({ showDiff: false, cascadeSummary: null });
     get().updateDim(compId, key, formatDimInches(newInches));
   },
 

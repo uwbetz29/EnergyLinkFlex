@@ -138,6 +138,8 @@ Respond with a JSON object containing an "actions" array. Each action has a type
 5. **info** — Provide information, analysis, or recommendations:
    {"action":"info", "message":"...", "severity":"info"}
 
+Optionally, include a top-level "summary" string (sibling of "actions"): ONE plain sentence a salesperson can read aloud, stating what changed and confirming it stays within engineering limits. Omit it if nothing changed.
+
 ## Rules
 - Match component references by name, type, or nozzle ID (e.g., "N3", "catalyst frame", "stack")
 - Dimension keys are typically "Height", "Width", "X Position", "Y Position"
@@ -147,7 +149,7 @@ Respond with a JSON object containing an "actions" array. Each action has a type
 - If a change might violate structural/clearance constraints, add a warn action
 - Keep messages concise and professional — this is a sales tool for engineers
 - For ambiguous requests, prefer info action asking for clarification
-- Respond ONLY with valid JSON: {"actions": [...]}`;
+- Respond ONLY with valid JSON: {"actions": [...], "summary": "..."}`;
 
   try {
     const result = await generateText({
