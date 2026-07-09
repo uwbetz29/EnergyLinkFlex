@@ -11,7 +11,7 @@ import { NLBar } from "./nl-bar";
 import { StageNav } from "./stage-nav";
 import { ChangeLedgerPanel } from "./change-ledger-panel";
 import Link from "next/link";
-import { ArrowLeft, Undo2, Redo2, Download, Loader2, Layers, Check, FileText, Image as ImageIcon, Package } from "lucide-react";
+import { ArrowLeft, Undo2, Redo2, Download, Loader2, Layers, Check, FileText, Image as ImageIcon, Package, Eye } from "lucide-react";
 import { getProject } from "@/app/projects/actions";
 import { exportDrawingPdf, exportDrawingPng, exportBidPackage, type ExportOptions } from "@/lib/dwg/drawing-export";
 import { toEditorComponents, parseSvgViewBox } from "@/lib/dwg/extractor";
@@ -110,6 +110,9 @@ export function EditorShell() {
     history,
     historyIndex,
     applyPersistedDimEdits,
+    showDiff,
+    toggleDiff,
+    setShowDiff,
   } = useEditorStore();
   const markups = useEditorStore((s) => s.markups);
   const components = useEditorStore((s) => s.components);
@@ -118,6 +121,12 @@ export function EditorShell() {
   const svgViewBox = useEditorStore((s) => s.svgViewBox);
   const canUndo = historyIndex >= 0;
   const canRedo = historyIndex < history.length - 1;
+
+  // Never strand the user in the Before (original) view with nothing to diff:
+  // if all changes are gone (undo/reset), force the toggle back off.
+  useEffect(() => {
+    if (changeCount === 0 && showDiff) setShowDiff(false);
+  }, [changeCount, showDiff, setShowDiff]);
 
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -533,6 +542,21 @@ export function EditorShell() {
             </span>
           )}
           {drawingType === "dwg" && <ChangeLedgerPanel />}
+          {drawingType === "dwg" && (
+            <button
+              onClick={toggleDiff}
+              disabled={changeCount === 0}
+              title="Toggle before/after (original vs configured)"
+              className={`px-3 py-1.5 rounded-[7px] text-[11px] font-semibold border border-white/15 ${
+                showDiff
+                  ? "bg-white/20 text-white hover:bg-white/25"
+                  : "bg-white/6 text-white/70 hover:bg-white/12 hover:text-white"
+              } transition-all flex items-center gap-1.5 disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-white/6 disabled:hover:text-white/70`}
+            >
+              <Eye className="w-3 h-3" />
+              {showDiff ? "After" : "Before"}
+            </button>
+          )}
           <button
             onClick={undo}
             disabled={!canUndo}

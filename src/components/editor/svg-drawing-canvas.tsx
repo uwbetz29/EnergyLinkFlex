@@ -556,6 +556,7 @@ export function SvgDrawingCanvas() {
     panX,
     panY,
     originals,
+    showDiff,
     svgViewBox,
     stretchWarning,
     cascadePending,
@@ -959,7 +960,7 @@ export function SvgDrawingCanvas() {
       // Re-apply stretches after cascade updates
       const svgEl = svgContainerRef.current?.querySelector("svg");
       if (svgEl) {
-        requestAnimationFrame(() => applyAllStretches(svgEl));
+        requestAnimationFrame(() => reapplyStretches(svgEl));
       }
     } catch (err) {
       // A superseded (aborted) request is expected — not an error.
@@ -1059,11 +1060,15 @@ export function SvgDrawingCanvas() {
               },
             });
           }
+          // User edit → exit the Before (original) demo view. Clear it here on the
+          // user-edit path only; the AI cascade also calls updateDim, so we must
+          // NOT clear showDiff inside updateDim itself.
+          useEditorStore.getState().setShowDiff(false);
           store.updateDim(closestCompId, dimKey, trimmed);
 
           // ─── VISUAL STRETCH: deform the drawing at the precise dimension zone ───
           requestAnimationFrame(() => {
-            applyAllStretches(svgEl as SVGSVGElement);
+            reapplyStretches(svgEl as SVGSVGElement);
           });
 
           // ─── AI CASCADE: ask AI what other components are affected ───
@@ -1192,6 +1197,36 @@ export function SvgDrawingCanvas() {
         width: vb[2],
         height: vb[3],
       });
+    }
+  }
+
+  // Single owner of stretch DOM state. Honors the before/after toggle.
+  function reapplyStretches(svgEl: SVGSVGElement) {
+    const store = useEditorStore.getState();
+    if (store.showDiff) {
+      // BEFORE view: revert to unstretched original.
+      undoStretches(svgEl);
+      postProcessSvgDom(svgEl);
+      syncOverlayViewBox(svgEl);
+      store.setActiveStretchGroups([]);
+      return;
+    }
+    // AFTER view: apply current stretches (or reset if all dims back to original).
+    const currentOriginals = store.originals;
+    const currentComps = store.components;
+    if (Object.keys(currentOriginals).length > 0) {
+      const hasChanges = Object.entries(currentOriginals).some(([id, orig]) => {
+        const c = currentComps[id];
+        return c && Object.entries(orig).some(([k, v]) => c.dims[k] !== v);
+      });
+      if (hasChanges) {
+        applyAllStretches(svgEl);
+      } else {
+        undoStretches(svgEl);
+        postProcessSvgDom(svgEl);
+        syncOverlayViewBox(svgEl);
+        store.setActiveStretchGroups([]);
+      }
     }
   }
 
@@ -1510,24 +1545,13 @@ export function SvgDrawingCanvas() {
       }
     }
 
-    // Apply visual stretches for dimension changes from AI configurator / undo-redo
-    // Only run when there are tracked originals (dimension edits have occurred)
-    if (Object.keys(originals).length > 0) {
-      const hasChanges = Object.entries(originals).some(([id, orig]) => {
-        const c = components[id];
-        return c && Object.entries(orig).some(([k, v]) => c.dims[k] !== v);
-      });
-      if (hasChanges) {
-        applyAllStretches(svgEl);
-      } else {
-        // All dims restored to original — reset geometry
-        undoStretches(svgEl);
-        postProcessSvgDom(svgEl);
-        syncOverlayViewBox(svgEl); // viewBox restored → resync overlay
-        useEditorStore.getState().setActiveStretchGroups([]); // no stretch active
-      }
-    }
-  }, [originals, components, svgLoaded]);
+    // Apply visual stretches for dimension changes (AI configurator / undo-redo),
+    // OR revert to the unstretched original when the before/after toggle is on.
+    // reapplyStretches is the single owner of stretch DOM state and reads showDiff
+    // fresh; adding showDiff to the deps re-runs this effect on toggle. There is
+    // deliberately NO separate [showDiff] effect — one owner avoids a double-apply.
+    reapplyStretches(svgEl);
+  }, [originals, components, svgLoaded, showDiff]);
 
   /* ─── Extract real dimensions from SVG after load ─── */
   const [dimsExtracted, setDimsExtracted] = useState(false);

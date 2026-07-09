@@ -131,6 +131,7 @@ export interface EditorState {
   select: (id: string | null) => void;
   toggleOverlays: () => void;
   toggleDiff: () => void;
+  setShowDiff: (v: boolean) => void;
   setStage: (s: Stage) => void;
   setZoom: (z: number) => void;
   setPan: (x: number, y: number) => void;
@@ -265,6 +266,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   select: (id) => set({ selectedId: id }),
   toggleOverlays: () => set((s) => ({ showOverlays: !s.showOverlays })),
   toggleDiff: () => set((s) => ({ showDiff: !s.showDiff })),
+  setShowDiff: (v) => set({ showDiff: v }),
   setStage: (s) => set({ stage: s }),
   setZoom: (z) => set({ zoom: Math.max(0.1, Math.min(5, z)) }),
   setPan: (x, y) => set({ panX: x, panY: y }),
@@ -372,12 +374,17 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       const num = parseFloat(current);
       if (!isNaN(num)) {
         const newVal = Math.max(1, num + deltaFt);
+        // A real user edit → exit the Before (original) demo view. Only on the
+        // paths that actually call updateDim, never on the no-op returns above.
+        set({ showDiff: false });
         get().updateDim(compId, key, String(Math.round(newVal * 100) / 100));
         return;
       }
       return;
     }
     const newInches = Math.max(12, inches + deltaFt * 12);
+    // A real user edit → exit the Before (original) demo view.
+    set({ showDiff: false });
     get().updateDim(compId, key, formatDimInches(newInches));
   },
 

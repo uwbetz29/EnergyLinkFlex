@@ -18,6 +18,7 @@ describe("Editor Store — DWG support", () => {
       components: {},
       selectedId: null,
       showOverlays: false,
+      showDiff: false,
       originals: {},
       changeCount: 0,
       zoom: 1,
@@ -41,6 +42,74 @@ describe("Editor Store — DWG support", () => {
       // a real dim on the same component still updates
       useEditorStore.getState().updateDim("c1", "Height", "12'-0\"");
       expect((useEditorStore.getState().components.c1 as { dims: Record<string, string> }).dims.Height).toBe("12'-0\"");
+    });
+  });
+
+  describe("before/after demo toggle (showDiff)", () => {
+    it("toggleDiff flips showDiff false → true → false", () => {
+      expect(useEditorStore.getState().showDiff).toBe(false);
+      useEditorStore.getState().toggleDiff();
+      expect(useEditorStore.getState().showDiff).toBe(true);
+      useEditorStore.getState().toggleDiff();
+      expect(useEditorStore.getState().showDiff).toBe(false);
+    });
+
+    it("setShowDiff sets the value directly", () => {
+      useEditorStore.getState().setShowDiff(true);
+      expect(useEditorStore.getState().showDiff).toBe(true);
+      useEditorStore.getState().setShowDiff(false);
+      expect(useEditorStore.getState().showDiff).toBe(false);
+    });
+
+    it("quickAdjust on a real edit changes the dim AND clears showDiff", () => {
+      useEditorStore.setState({
+        showDiff: true,
+        components: {
+          c1: {
+            id: "c1",
+            name: "Silencer",
+            mainDim: "Width",
+            dims: { Width: "10" },
+          } as unknown as never,
+        },
+        originals: {},
+        changeCount: 0,
+        history: [],
+        historyIndex: -1,
+      });
+      useEditorStore.getState().quickAdjust("c1", 5);
+      const s = useEditorStore.getState();
+      // Prove a real user edit actually happened (not just the toggle flip):
+      expect((s.components.c1 as { dims: Record<string, string> }).dims.Width).not.toBe("10");
+      expect(s.changeCount).toBe(1);
+      expect(s.history).toHaveLength(1);
+      // …and that edit exited the Before (original) demo view.
+      expect(s.showDiff).toBe(false);
+    });
+
+    it("quickAdjust on a NO-OP (unparseable dim) leaves showDiff untouched", () => {
+      useEditorStore.setState({
+        showDiff: true,
+        components: {
+          c2: {
+            id: "c2",
+            name: "Label-only",
+            mainDim: "Note",
+            dims: { Note: "N/A" }, // not a dimension → parseDimInches null, parseFloat NaN
+          } as unknown as never,
+        },
+        originals: {},
+        changeCount: 0,
+        history: [],
+        historyIndex: -1,
+      });
+      useEditorStore.getState().quickAdjust("c2", 5);
+      const s = useEditorStore.getState();
+      // No edit occurred…
+      expect((s.components.c2 as { dims: Record<string, string> }).dims.Note).toBe("N/A");
+      expect(s.changeCount).toBe(0);
+      // …so a no-op must NOT snap the user out of the Before view.
+      expect(s.showDiff).toBe(true);
     });
   });
 
