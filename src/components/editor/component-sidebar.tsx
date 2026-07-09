@@ -288,6 +288,7 @@ function SelectedDetail({
                 key={`${key}-${val}`}
                 type="text"
                 defaultValue={val as string}
+                aria-label={dimLabel(key)}
                 onBlur={(e) => onDimChange(key, e.target.value)}
                 onKeyDown={(e) => {
                   if (e.key === "Enter") {

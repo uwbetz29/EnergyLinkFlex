@@ -363,6 +363,7 @@ function DimensionEditor({
             type="number"
             min={0}
             max={11}
+            aria-label="Inches"
             value={inches}
             onChange={(e) =>
               setInches(
@@ -379,6 +380,7 @@ function DimensionEditor({
           {/* Fraction */}
           <select
             value={fraction}
+            aria-label="Fraction"
             onChange={(e) => setFraction(e.target.value)}
             onKeyDown={handleKeyDown}
             className="w-[70px] px-1.5 py-1.5 rounded-lg bg-gray-50 border border-gray-200
