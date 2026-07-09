@@ -105,6 +105,7 @@ export function MarkupOverlay({ viewBox, sheetNumber }: MarkupOverlayProps) {
     deleteMarkup,
     selectMarkup,
     setMarkupTool,
+    endTextDraft,
   } = useEditorStore();
   /** Composed axis maps for the active stretch (empty = unstretched). Markups are
    *  stored in BASE (unstretched) coords; we forward them for display and inverse
@@ -210,15 +211,16 @@ export function MarkupOverlay({ viewBox, sheetNumber }: MarkupOverlayProps) {
       }
     }
     // Empty text is discarded either way (new markup: never created;
-    // existing markup: edit dropped, original text kept).
-    if (!d.editingId) setMarkupTool("pan");
+    // existing markup: edit dropped, original text kept). Either way, the
+    // tool returns to pan — matches new-draft behaviour, no editingId asymmetry.
+    endTextDraft();
     setTextDraft(null);
-  }, [textDraft, addMarkup, updateMarkup, setMarkupTool, sheetNumber]);
+  }, [textDraft, addMarkup, updateMarkup, endTextDraft, sheetNumber]);
 
   const cancelTextDraft = useCallback(() => {
-    if (textDraft && !textDraft.editingId) setMarkupTool("pan");
+    if (textDraft) endTextDraft();
     setTextDraft(null);
-  }, [textDraft, setMarkupTool]);
+  }, [textDraft, endTextDraft]);
 
   /* ─── Pointer handlers on the overlay svg ─── */
   const handlePointerDown = (e: React.PointerEvent<SVGSVGElement>) => {

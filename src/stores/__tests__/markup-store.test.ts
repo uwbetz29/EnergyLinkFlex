@@ -26,4 +26,10 @@ describe("markup store slice", () => {
     useEditorStore.getState().setMarkupTool("arrow");
     expect(useEditorStore.getState().markupTool).toBe("arrow");
   });
+  it("endTextDraft always returns tool to pan (no editingId asymmetry)", () => {
+    const s = useEditorStore.getState();
+    s.setMarkupTool("select");
+    s.endTextDraft();
+    expect(useEditorStore.getState().markupTool).toBe("pan");
+  });
 });

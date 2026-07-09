@@ -161,6 +161,7 @@ export interface EditorState {
   deleteMarkup: (id: MarkupId) => void;
   selectMarkup: (id: MarkupId | null) => void;
   setMarkupTool: (t: EditorState["markupTool"]) => void;
+  endTextDraft: () => void;
   setMarkups: (m: Markup[]) => void; // hydrate on load
 }
 
@@ -556,5 +557,6 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     })),
   selectMarkup: (id) => set({ selectedMarkupId: id }),
   setMarkupTool: (t) => set({ markupTool: t }),
+  endTextDraft: () => set({ markupTool: "pan" }),
   setMarkups: (m) => set({ markups: m }),
 }));
