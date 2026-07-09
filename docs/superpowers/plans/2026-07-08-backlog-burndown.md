@@ -1,9 +1,11 @@
 # Backlog Burn-Down — Plan + Execution Record (Session 10)
 
 > Hardened plan (3-lens adversarial review applied) + subagent-driven execution log.
-> NOTE: the original untracked copy of this file was deleted by the Google-Drive sync
-> layer mid-session (local clone ≠ Google-Drive path; untracked files are not safe).
-> This file is now COMMITTED. Do not leave session artifacts untracked in this clone.
+> NOTE: the original untracked copy of this file was deleted mid-session by a subagent's
+> `git clean -fd` (run for a pristine lint-baseline tree). `git clean` removes UNTRACKED
+> files only and leaves no reflog trace (first mis-attributed to Google-Drive sync — wrong).
+> This file is now COMMITTED (tracked files are immune to clean). Commit session artifacts
+> immediately; keep subagent lint-hygiene off untracked files.
 
 ## BLUF
 
