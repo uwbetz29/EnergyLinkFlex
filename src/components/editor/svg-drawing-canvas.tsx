@@ -21,6 +21,7 @@ import { dampenHatch } from "@/lib/dwg/hatch";
 import { getDimBlockBounds, dimBlockBox2D, computeComponentBand } from "@/lib/dwg/dim-geometry";
 import { detectDetachedAssemblies, CONF_MIN } from "@/lib/dwg/detached";
 import { buildDeterministicSummary, type AppliedChange } from "@/lib/dwg/change-summary";
+import { progressFromEstimate, formatEta } from "@/lib/dwg/progress-estimator";
 import type { ComponentDef } from "@/stores/editor-store";
 import { MarkupOverlay } from "./markup-overlay";
 import { MarkupToolbar } from "./markup-toolbar";
@@ -416,6 +417,32 @@ function DimensionEditor({
   );
 }
 
+/* ─── Long-wait progress bar + ETA readout ─── */
+
+function ProgressReadout({ percent, label, etaLabel, variant }: { percent: number; label: string; etaLabel: string; variant: "center" | "banner" }) {
+  const bar = (
+    <div className="w-full">
+      <div className="flex items-center justify-between mb-1">
+        <span className="text-[12px] font-semibold text-slate-700">{label}</span>
+        {etaLabel && <span className="text-[11px] text-slate-500">{etaLabel}</span>}
+      </div>
+      <div className="h-1.5 w-full rounded-full bg-slate-200 overflow-hidden">
+        <div className="h-full rounded-full bg-blue-600 transition-[width] duration-200 ease-out" style={{ width: `${Math.max(2, Math.min(100, percent))}%` }} />
+      </div>
+    </div>
+  );
+  if (variant === "center") {
+    return (
+      <div className="absolute inset-0 z-40 flex items-center justify-center pointer-events-none">
+        <div className="pointer-events-auto w-[320px] max-w-[80%] rounded-xl bg-white/95 border border-slate-200 shadow-lg px-5 py-4" role="status" aria-live="polite">{bar}</div>
+      </div>
+    );
+  }
+  return (
+    <div className="pointer-events-auto w-[300px] max-w-[80vw] rounded-xl bg-white/95 border border-blue-200 shadow-md px-4 py-2.5" role="status" aria-live="polite">{bar}</div>
+  );
+}
+
 /* ─── SVG Minimap ─── */
 
 function SvgMinimap({
@@ -560,7 +587,6 @@ export function SvgDrawingCanvas() {
     showDiff,
     svgViewBox,
     stretchWarning,
-    cascadePending,
     cascadeNotice,
     cascadeSummary,
     sheetType,
@@ -573,6 +599,7 @@ export function SvgDrawingCanvas() {
     setStretchWarning,
     setCascadeNotice,
     setCascadeSummary,
+    loadProgress,
   } = useEditorStore();
 
   // On unmount (leaving the editor), cancel any pending/in-flight AI cascade so a
@@ -615,6 +642,12 @@ export function SvgDrawingCanvas() {
   useEffect(() => {
     if (!svgUrl) return;
     let cancelled = false;
+    // Owned by the EFFECT scope (not the loadSvg closure) so cleanup can reach
+    // them: abort an in-flight ~40MB fetch and stop the progress ticker on a
+    // sheet switch / unmount, instead of leaking a 150ms interval until the
+    // stale fetch settles.
+    let stopLoadTicker: (() => void) | null = null;
+    const loadAbort = new AbortController();
 
     // Reset state for new SVG (sheet switch)
     setSvgLoaded(false);
@@ -630,19 +663,26 @@ export function SvgDrawingCanvas() {
     cascadeAbortRef.current = null;
 
     async function loadSvg() {
+      stopLoadTicker = startProgressTicker("Loading drawing", 4000);
       try {
         // In dev, bypass the HTTP disk cache: the drawing SVG can be ~40MB and a
         // sandboxed dev browser may fail to cache it (ERR_CACHE_WRITE_FAILURE),
         // aborting the fetch. Prod keeps default caching (CDN-backed, fast reloads).
-        const res = await fetch(
-          svgUrl!,
-          process.env.NODE_ENV === "production" ? undefined : { cache: "no-store" }
-        );
+        const res = await fetch(svgUrl!, {
+          signal: loadAbort.signal,
+          ...(process.env.NODE_ENV !== "production" ? { cache: "no-store" as RequestCache } : {}),
+        });
         const svgText = await res.text();
         if (cancelled) return;
 
         const container = svgContainerRef.current;
         if (!container) return;
+
+        // Download done — the parse+innerHTML below blocks the main thread, so
+        // switch to a static "Rendering" state and let it paint one frame first.
+        stopLoadTicker();
+        useEditorStore.getState().setLoadProgress({ percent: 92, label: "Rendering drawing…", etaLabel: "" });
+        await new Promise((r) => requestAnimationFrame(() => r(null)));
 
         // Process SVG: white->black strokes/fills for light background
         const fixedSvg = processLibreDwgSvg(svgText);
@@ -683,13 +723,22 @@ export function SvgDrawingCanvas() {
           }
         }
       } catch (err) {
+        // Aborted on cleanup (sheet switch / unmount) — expected, not an error.
+        if (err instanceof DOMException && err.name === "AbortError") return;
         console.error("Failed to load SVG:", err);
+      } finally {
+        stopLoadTicker?.();
+        // Don't wipe a newer load's progress if this one was cancelled/aborted.
+        if (!cancelled) useEditorStore.getState().setLoadProgress(null);
       }
     }
 
     loadSvg();
     return () => {
       cancelled = true;
+      loadAbort.abort();
+      stopLoadTicker?.();
+      useEditorStore.getState().setLoadProgress(null);
     };
   }, [svgUrl]);
 
@@ -898,6 +947,7 @@ export function SvgDrawingCanvas() {
     cascadeAbortRef.current = controller;
     const store = useEditorStore.getState();
     store.setCascadePending(true);
+    const stopCascadeTicker = startProgressTicker("Checking downstream…", 9000);
     try {
       const allComps = Object.values(store.components).map((c) => ({
         id: c.id,
@@ -997,6 +1047,8 @@ export function SvgDrawingCanvas() {
       console.warn("[ELF] AI cascade failed:", err);
     } finally {
       // Only the latest in-flight request clears the pending flag.
+      stopCascadeTicker();
+      if (cascadeAbortRef.current === controller) useEditorStore.getState().setLoadProgress(null);
       if (cascadeAbortRef.current === controller) store.setCascadePending(false);
     }
   }
@@ -1210,6 +1262,21 @@ export function SvgDrawingCanvas() {
     }
 
     if (changed) store.setComponents({ ...comps, ...updated });
+  }
+
+  // Drives an indeterminate progress bar + ETA for a wait of ~expectedMs.
+  // Returns a stop() that clears the interval. Caller clears loadProgress.
+  function startProgressTicker(label: string, expectedMs: number) {
+    const store = useEditorStore.getState();
+    const start = performance.now();
+    let prev = 0;
+    store.setLoadProgress({ percent: 0, label, etaLabel: "" });
+    const id = window.setInterval(() => {
+      const { percent, etaMs } = progressFromEstimate(performance.now() - start, expectedMs, prev);
+      prev = percent;
+      useEditorStore.getState().setLoadProgress({ percent, label, etaLabel: formatEta(etaMs) });
+    }, 150);
+    return () => window.clearInterval(id);
   }
 
   /**
@@ -1763,18 +1830,8 @@ export function SvgDrawingCanvas() {
           overlapping in one slot or colliding with the top-right markup toolbar).
           Container is click-through; each banner re-enables pointer events. */}
       <div className="absolute top-3 left-1/2 -translate-x-1/2 z-30 flex flex-col items-center gap-2 pointer-events-none max-w-[min(90%,640px)]">
-        {/* AI cascade in-flight indicator */}
-        {cascadePending && (
-          <div
-            className="pointer-events-auto flex items-center gap-2 px-3 py-1.5
-                       rounded-full bg-blue-50 border border-blue-200 text-blue-600
-                       text-[11px] font-semibold shadow-sm"
-            aria-live="polite"
-          >
-            <span className="w-3 h-3 rounded-full border-2 border-blue-300 border-t-blue-600 animate-spin" />
-            Checking downstream…
-          </div>
-        )}
+        {/* AI cascade in-flight indicator — progress bar + ETA */}
+        {loadProgress && svgLoaded && <ProgressReadout {...loadProgress} variant="banner" />}
 
         {/* Stretch-failure warning (drawing was rolled back, left unchanged) */}
         {stretchWarning && (
@@ -1847,6 +1904,9 @@ export function SvgDrawingCanvas() {
           </div>
         )}
       </div>
+
+      {/* Initial drawing-load progress — overlays the blank canvas (centered) */}
+      {loadProgress && !svgLoaded && <ProgressReadout {...loadProgress} variant="center" />}
 
       {/* SVG drawing + component overlays */}
       <div

@@ -101,6 +101,9 @@ export interface EditorState {
   /** Plain-language recap of the last AI cascade ("what changed"). Info-level. */
   cascadeSummary: string | null;
   setCascadeSummary: (s: string | null) => void;
+  /** Active long-wait progress for a bar + ETA, or null when idle. */
+  loadProgress: { percent: number; label: string; etaLabel: string } | null;
+  setLoadProgress: (p: { percent: number; label: string; etaLabel: string } | null) => void;
 
   /* Undo / Redo */
   history: { compId: string; dimKey: string; prevValue: string; newValue: string }[];
@@ -210,6 +213,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   cascadePending: false,
   cascadeNotice: null,
   cascadeSummary: null,
+  loadProgress: null,
 
   history: [],
   historyIndex: -1,
@@ -257,6 +261,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   setCascadePending: (pending) => set({ cascadePending: pending }),
   setCascadeNotice: (notice) => set({ cascadeNotice: notice }),
   setCascadeSummary: (s) => set({ cascadeSummary: s }),
+  setLoadProgress: (p) => set({ loadProgress: p }),
   toggleLayer: (layerName) =>
     set((s) => {
       const next = new Set(s.visibleLayers);
