@@ -591,7 +591,14 @@ export function applyMultiStretch(
       // (the shift accumulated below the segment). Equipment maps exactly: c ↦ f(c).
       const rigid = annotation || !inBand;
       const sc = rigid ? 1 : p.scale;
-      const t = rigid ? p.annTranslate : p.translate;
+      // A HEIGHT (vertical) edit is LOCAL to the edited component's column: equipment
+      // in OTHER columns (out of crossBand, not an annotation) must stay put, NOT ride
+      // the vertical tail. Otherwise raising a mid-flow section lifts the ENTIRE upper
+      // drawing by delta and tears every element spanning the zone (the open-gap bug).
+      // Horizontal (width) edits DO propagate downstream full-height (the flow axis),
+      // so this column-containment is vertical-only.
+      const columnStatic = g.axis === "y" && !inBand && !annotation;
+      const t = columnStatic ? 0 : rigid ? p.annTranslate : p.translate;
       if (g.axis === "y") {
         sy *= sc;
         if (sc === 1) rty += t; else sty += t;

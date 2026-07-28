@@ -1365,6 +1365,8 @@ export function SvgDrawingCanvas() {
 
     const stretches: StretchParams[] = [];
     const editedBlockIds = new Set<string>();
+    // Height edits that can't be safely column-scoped (see the guard below).
+    const unscopableHeight: string[] = [];
 
     for (const [compId, compOrig] of Object.entries(currentOriginals)) {
       const comp = currentComps[compId];
@@ -1437,6 +1439,17 @@ export function SvgDrawingCanvas() {
         const band = hasCrossDim
           ? computeComponentBand(comp.dimBlocks, svgEl, dir === "horizontal" ? "x" : "y")
           : null;
+        // GUARD: a HEIGHT edit is contained to the component's column via crossBand
+        // (out-of-column geometry is held rigid — see applyMultiStretch). A height-only
+        // component has no width dim, so there's no reliable column to bound it, and a
+        // component's own height dim block is often drawn in a far margin (unreliable).
+        // Without a trustworthy column the edit would rigidly lift the whole upper
+        // drawing and tear it, so refuse it (leave the drawing unchanged) rather than
+        // produce open gaps.
+        if (dir === "vertical" && !band) {
+          unscopableHeight.push(comp.name);
+          continue; // do not queue, do not re-value the dim number
+        }
         stretches.push({
           componentId: compId,
           svgBounds,
@@ -1464,6 +1477,15 @@ export function SvgDrawingCanvas() {
     // details for free but not shared-band ones), so warn for manual review. On the real
     // drawings U3 is low-confidence (the skid is cross-separated + tiny), so no spurious
     // warning fires; this only triggers for a hypothetical large shared-band detail.
+    // Surface any height edits we refused to column-scope (see the guard above). Set
+    // after the queue loop so it survives a successful apply of the OTHER stretches.
+    if (unscopableHeight.length > 0) {
+      const names = Array.from(new Set(unscopableHeight)).join(", ");
+      useEditorStore.getState().setStretchWarning(
+        `Height resize isn't supported for ${names} yet — the drawing was left unchanged for ${unscopableHeight.length > 1 ? "those" : "that"}.`
+      );
+    }
+
     let detachedWarn = false;
     if (modelSpace) {
       const highConf = detectDetachedAssemblies(modelSpace).filter(
